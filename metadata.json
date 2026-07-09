@@ -1,0 +1,6 @@
+{
+  "name": "JavaScript IDE",
+  "description": "A lightweight JavaScript IDE for coding on the go. Features custom syntax highlighting, autocomplete, NPM package loader, browser-like window preview, and built-in interactive terminal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
