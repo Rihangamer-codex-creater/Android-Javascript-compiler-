@@ -246,108 +246,15 @@ setTimeout(() => {
         console.log("🎨 Canvas Animation started successfully.");
     </script>
 </body>
-</html>
-"""
+</html>"""
             )
             fileDao.insertFile(canvasHtml)
-
-            // 3. Simple React client-side demonstration using script tags (html)
-            val reactHtml = ProgramFile(
-                name = "react_counter.html",
-                language = "html",
-                isCurrent = false,
-                content = """<!DOCTYPE html>
-<html>
-<head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Load React & ReactDOM via ES Modules for speed/compatibility -->
-    <script type="importmap">
-      {
-        "imports": {
-          "react": "https://esm.sh/react@18.2.0?dev",
-          "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?dev"
-        }
-      }
-    </script>
-    <style>
-        body {
-            margin: 0;
-            padding: 24px;
-            background-color: #121212;
-            color: #ffffff;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 80vh;
-        }
-        .card {
-            background-color: #1e1e1e;
-            padding: 32px;
-            border-radius: 16px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-            text-align: center;
-            width: 100%;
-            max-width: 320px;
-            border: 1px solid #333;
-        }
-        h1 { margin-top: 0; color: #61dafb; font-size: 28px; }
-        .count { font-size: 64px; font-weight: bold; margin: 20px 0; color: #fff; }
-        .btn-group { display: flex; gap: 12px; justify-content: center; }
-        button {
-            padding: 12px 24px;
-            font-size: 18px;
-            font-weight: bold;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .btn-add { background-color: #61dafb; color: #121212; }
-        .btn-sub { background-color: #333; color: #fff; border: 1px solid #555; }
-        button:active { transform: scale(0.95); }
-        .footer { font-size: 12px; color: #666; margin-top: 24px; }
-    </style>
-</head>
-<body>
-    <div id="root"></div>
-
-    <script type="module">
-        import React, { useState } from 'react';
-        import ReactDOM from 'react-dom/client';
-
-        function CounterApp() {
-            const [count, setCount] = useState(0);
-
-            return React.createElement('div', { className: 'card' },
-                React.createElement('h1', null, '⚛️ React Sandbox'),
-                React.createElement('p', { style: { color: '#888', fontSize: '14px' } }, 'State-driven fully responsive UI'),
-                React.createElement('div', { className: 'count' }, count),
-                React.createElement('div', { className: 'btn-group' },
-                    React.createElement('button', { className: 'btn-sub', onClick: () => setCount(count - 1) }, '−'),
-                    React.createElement('button', { className: 'btn-add', onClick: () => setCount(count + 1) }, '＋')
-                ),
-                React.createElement('div', { className: 'footer' }, 'Running locally in sandboxed WebView')
-            );
-        }
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(React.createElement(CounterApp));
-        console.log("⚛️ React counter component rendered successfully.");
-    </script>
-</body>
-</html>
-"""
-            )
-            fileDao.insertFile(reactHtml)
         }
 
         // Populate popular npm libraries references
         val allLibraries = libraryDao.getAllLibrariesFlow().first()
         if (allLibraries.isEmpty()) {
             val defaultLibs = listOf(
-                NpmLibrary("react", "https://esm.sh/react@18.2.0"),
-                NpmLibrary("react-dom", "https://esm.sh/react-dom@18.2.0"),
                 NpmLibrary("lodash", "https://esm.sh/lodash@4.17.21"),
                 NpmLibrary("axios", "https://esm.sh/axios@1.6.8"),
                 NpmLibrary("chart.js", "https://esm.sh/chart.js@4.4.2"),

@@ -50,10 +50,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // Code execution state
     var isCodeRunning by mutableStateOf(false)
     var runCodeEvent = MutableStateFlow<String?>(null)
-    var selectedTab by mutableStateOf(0) // 0: Editor, 1: Browser/Preview, 2: Terminal, 3: Libraries, 4: AI Coach, 5: Settings
+    var selectedTab by mutableStateOf(0) // 0: Editor, 1: Browser/Preview, 2: Terminal, 3: Libraries, 4: Settings
 
     // Settings States
-    var isDarkMode by mutableStateOf(true)
+    var isDarkMode by mutableStateOf(false)
     var isJsExecutionEnabled by mutableStateOf(true)
     var isAutocompleteEnabled by mutableStateOf(true)
     var isVoiceSupportEnabled by mutableStateOf(false)
@@ -87,10 +87,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // AI Assist state
-    var aiResponseText by mutableStateOf("")
-    var isAiLoading by mutableStateOf(false)
-
     // Library downloading states
     var downloadingLibraryName by mutableStateOf<String?>(null)
     var libraryDownloadError by mutableStateOf<String?>(null)
@@ -105,7 +101,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             // Load Settings
-            isDarkMode = repository.getSetting("isDarkMode", "true").toBoolean()
+            isDarkMode = repository.getSetting("isDarkMode", "false").toBoolean()
             isJsExecutionEnabled = repository.getSetting("isJsExecutionEnabled", "true").toBoolean()
             isAutocompleteEnabled = repository.getSetting("isAutocompleteEnabled", "true").toBoolean()
             isAutoTerminateEnabled = repository.getSetting("isAutoTerminateEnabled", "true").toBoolean()
@@ -132,6 +128,113 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         saveJob?.cancel()
         viewModelScope.launch {
             repository.updateFile(file.copy(content = editorCode, lastModified = System.currentTimeMillis()))
+            
+            // Also write back to external system file URI if linked
+            file.externalUri?.let { uriStr ->
+                try {
+                    val uri = android.net.Uri.parse(uriStr)
+                    com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, editorCode)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to auto-save to external Uri: $uriStr", e)
+                }
+            }
+        }
+    }
+
+    fun openExternalFile(context: android.content.Context, uri: android.net.Uri) {
+        viewModelScope.launch {
+            saveCurrentFileImmediately() // save any pending edits first
+            val content = com.example.ui.files.ExternalFileHelper.readTextFromUri(context, uri)
+            if (content == null) {
+                addLog("error", "Failed to read file contents from system explorer.")
+                return@launch
+            }
+            
+            val name = com.example.ui.files.ExternalFileHelper.getFileNameFromUri(context, uri)
+            val language = com.example.ui.files.ExternalFileHelper.detectLanguage(name)
+
+            // Persist URI permissions across reboots
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to persist URI permission", e)
+            }
+
+            // Check if we already have this file in db
+            val existingFiles = repository.getFilesList()
+            val alreadyImported = existingFiles.find { it.externalUri == uri.toString() }
+
+            if (alreadyImported != null) {
+                // Just switch to it and update the content if it changed
+                val updatedFile = alreadyImported.copy(content = content, lastModified = System.currentTimeMillis())
+                repository.updateFile(updatedFile)
+                repository.selectFile(alreadyImported.id)
+                addLog("info", "✓ Opened existing device file: $name")
+            } else {
+                // Insert as a new external file
+                val extFile = ProgramFile(
+                    name = name,
+                    content = content,
+                    language = language,
+                    isCurrent = true,
+                    externalUri = uri.toString()
+                )
+                val newId = repository.insertFile(extFile)
+                repository.selectFile(newId)
+                addLog("info", "✓ Opened and linked new device file: $name")
+            }
+        }
+    }
+
+    fun saveCurrentAsExternal(context: android.content.Context, uri: android.net.Uri) {
+        viewModelScope.launch {
+            val success = com.example.ui.files.ExternalFileHelper.writeTextToUri(context, uri, editorCode)
+            if (!success) {
+                addLog("error", "Failed to write content to system files.")
+                return@launch
+            }
+
+            // Persist URI permissions
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to persist URI permission", e)
+            }
+
+            val name = com.example.ui.files.ExternalFileHelper.getFileNameFromUri(context, uri)
+            val language = com.example.ui.files.ExternalFileHelper.detectLanguage(name)
+
+            val current = currentFile.value
+            if (current != null) {
+                // Update current file to link to external Uri
+                val updated = current.copy(
+                    name = name,
+                    content = editorCode,
+                    language = language,
+                    externalUri = uri.toString(),
+                    lastModified = System.currentTimeMillis()
+                )
+                repository.updateFile(updated)
+                addLog("info", "✓ Linked and saved file as device file: $name")
+            } else {
+                // Scaffold dynamic file
+                val extFile = ProgramFile(
+                    name = name,
+                    content = editorCode,
+                    language = language,
+                    isCurrent = true,
+                    externalUri = uri.toString()
+                )
+                val newId = repository.insertFile(extFile)
+                repository.selectFile(newId)
+                addLog("info", "✓ Created and linked new device file: $name")
+            }
         }
     }
 
@@ -150,7 +253,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             
             val defaultContent = when (language) {
                 "html" -> "<!DOCTYPE html>\n<html>\n<head>\n    <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n    <h2>Hello from Sandbox</h2>\n    <script src=\"script.js\"></script>\n</body>\n</html>"
-                "css" -> "body {\n    background-color: #121212;\n    color: #ffffff;\n    font-family: sans-serif;\n}"
+                "css" -> "body {\n    background-color: #FAFAFA;\n    color: #121212;\n    font-family: sans-serif;\n}"
                 else -> "console.log(\"File loaded successfully!\");"
             }
             
@@ -187,6 +290,16 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         saveJob = viewModelScope.launch {
             kotlinx.coroutines.delay(800)
             repository.updateFile(file.copy(content = newCode, lastModified = System.currentTimeMillis()))
+            
+            // Also autosave back to external system file URI if linked
+            file.externalUri?.let { uriStr ->
+                try {
+                    val uri = android.net.Uri.parse(uriStr)
+                    com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, newCode)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to autosave to external Uri: $uriStr", e)
+                }
+            }
         }
     }
 
@@ -486,180 +599,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             db.npmLibraryDao().insertLibrary(NpmLibrary(name = name, url = url))
             addLog("info", "✓ Added library reference: $name")
-        }
-    }
-
-    // --- AI Assist Feature ---
-
-    fun askAiAssistant(question: String) {
-        if (isAiLoading) return
-        isAiLoading = true
-        aiResponseText = "Thinking..."
-        voiceAssistant.speak("Analyzing question")
-
-        viewModelScope.launch {
-            val prompt = """
-                Question/Task: $question
-                
-                Current File Name: ${currentFile.value?.name ?: "index.js"}
-                Current File Content:
-                ```javascript
-                $editorCode
-                ```
-                
-                Provide helper comments, recommendations, clean ES6 code, or complete instructions.
-                Your response will be displayed in the AI panel. Keep it structured, educational, and clear.
-            """.trimIndent()
-
-            val response = GeminiClient.generateCodeOrAnswer(
-                prompt = prompt,
-                systemInstruction = "You are an expert mobile developer voice coding assistant. Help the user fix mistakes, write code blocks, or understand web features. Provide helpful summaries and clear code blocks. If code is requested, provide it cleanly."
-            )
-            
-            aiResponseText = response
-            isAiLoading = false
-            
-            // Speak summary of the AI answer
-            if (isVoiceSupportEnabled) {
-                val cleanSpeakText = if (response.contains("```")) {
-                    response.substringBefore("```") + ". I have written the code solution in the panel below."
-                } else {
-                    response
-                }
-                voiceAssistant.speak(cleanSpeakText.take(200)) // Voice the first 200 characters for speed
-            }
-        }
-    }
-
-    fun applyAiCodeToEditor(aiCode: String) {
-        // Strip code block markers if AI included them
-        var cleanCode = aiCode
-        if (cleanCode.contains("```javascript")) {
-            cleanCode = cleanCode.substringAfter("```javascript").substringBefore("```")
-        } else if (cleanCode.contains("```js")) {
-            cleanCode = cleanCode.substringAfter("```js").substringBefore("```")
-        } else if (cleanCode.contains("```html")) {
-            cleanCode = cleanCode.substringAfter("```html").substringBefore("```")
-        } else if (cleanCode.contains("```")) {
-            cleanCode = cleanCode.substringAfter("```").substringBefore("```")
-        }
-        
-        updateEditorCode(cleanCode.trim())
-        addLog("info", "✓ Applied code from AI Assistant directly to Editor.")
-        voiceAssistant.speak("Code applied")
-    }
-
-    fun splitAndSaveAiResponseAsProject(folderName: String, aiResponse: String) {
-        viewModelScope.launch {
-            saveCurrentFileImmediately() // Save current edits first
-            
-            var htmlContent = ""
-            var cssContent = ""
-            var jsContent = ""
-
-            // Regex extraction
-            val htmlRegex = "```html\\s*([\\s\\S]*?)\\s*```".toRegex(RegexOption.IGNORE_CASE)
-            val cssRegex = "```css\\s*([\\s\\S]*?)\\s*```".toRegex(RegexOption.IGNORE_CASE)
-            val jsRegex = "```(?:javascript|js)\\s*([\\s\\S]*?)\\s*```".toRegex(RegexOption.IGNORE_CASE)
-
-            htmlContent = htmlRegex.find(aiResponse)?.groups?.get(1)?.value ?: ""
-            cssContent = cssRegex.find(aiResponse)?.groups?.get(1)?.value ?: ""
-            jsContent = jsRegex.find(aiResponse)?.groups?.get(1)?.value ?: ""
-
-            // Fallback heuristic for raw HTML inside markdown
-            if (htmlContent.isEmpty()) {
-                val rawHtmlStart = aiResponse.indexOf("<!DOCTYPE html", ignoreCase = true)
-                if (rawHtmlStart != -1) {
-                    val rawHtmlEnd = aiResponse.indexOf("</html>", ignoreCase = true)
-                    if (rawHtmlEnd != -1 && rawHtmlEnd > rawHtmlStart) {
-                        htmlContent = aiResponse.substring(rawHtmlStart, rawHtmlEnd + 7)
-                    }
-                }
-            }
-
-            // Standard fallback scaffold templates
-            if (htmlContent.isEmpty()) {
-                htmlContent = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="utf-8">
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <link rel="stylesheet" href="style.css">
-                    </head>
-                    <body>
-                        <h2>AI Generated Project Screen</h2>
-                        <div id="output-box">App starting...</div>
-                        <script src="script.js"></script>
-                    </body>
-                    </html>
-                """.trimIndent()
-            }
-
-            if (cssContent.isEmpty()) {
-                cssContent = """
-                    body {
-                        background-color: #121212;
-                        color: #ffffff;
-                        font-family: system-ui, -apple-system, sans-serif;
-                        padding: 24px;
-                        display: flex;
-                        flex-direction: column;
-                        align-items: center;
-                        justify-content: center;
-                        min-height: 80vh;
-                    }
-                    #output-box {
-                        background-color: #1e1e1e;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border: 1px solid #333;
-                        font-family: monospace;
-                        margin-top: 16px;
-                    }
-                """.trimIndent()
-            }
-
-            if (jsContent.isEmpty()) {
-                jsContent = """
-                    console.log("App loaded successfully!");
-                    document.getElementById("output-box").innerText = "Success! Sandbox running offline.";
-                """.trimIndent()
-            }
-
-            // Ensure index.html references local files so WebView handles local intercept properly
-            if (!htmlContent.contains("style.css")) {
-                if (htmlContent.contains("</head>")) {
-                    htmlContent = htmlContent.replace("</head>", "    <link rel=\"stylesheet\" href=\"style.css\">\n</head>")
-                } else {
-                    htmlContent = htmlContent + "\n<link rel=\"stylesheet\" href=\"style.css\">"
-                }
-            }
-            if (!htmlContent.contains("script.js")) {
-                if (htmlContent.contains("</body>")) {
-                    htmlContent = htmlContent.replace("</body>", "    <script src=\"script.js\"></script>\n</body>")
-                } else {
-                    htmlContent = htmlContent + "\n<script src=\"script.js\"></script>"
-                }
-            }
-
-            val folderClean = folderName.trim().replace(" ", "_")
-
-            val htmlFile = ProgramFile(name = "index.html", content = htmlContent, language = "html", folder = folderClean, isCurrent = false)
-            val cssFile = ProgramFile(name = "style.css", content = cssContent, language = "css", folder = folderClean, isCurrent = false)
-            val jsFile = ProgramFile(name = "script.js", content = jsContent, language = "javascript", folder = folderClean, isCurrent = true)
-
-            repository.insertFile(htmlFile)
-            repository.insertFile(cssFile)
-            val mainFileId = repository.insertFile(jsFile)
-            
-            repository.selectFile(mainFileId)
-            
-            addLog("info", "✓ Extracted AI response into project folder: /$folderClean/")
-            addLog("info", "📁 Created: /$folderClean/index.html")
-            addLog("info", "📁 Created: /$folderClean/style.css")
-            addLog("info", "📁 Created: /$folderClean/script.js")
-            voiceAssistant.speak("Project scaffolded successfully from AI response")
         }
     }
 

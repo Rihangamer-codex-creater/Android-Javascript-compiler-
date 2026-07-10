@@ -12,7 +12,8 @@ data class ProgramFile(
     val language: String, // "javascript", "html", "css"
     val isCurrent: Boolean = false,
     val lastModified: Long = System.currentTimeMillis(),
-    val folder: String = ""
+    val folder: String = "",
+    val externalUri: String? = null
 )
 
 // 2. Npm Library Entity

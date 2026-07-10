@@ -5,14 +5,13 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -29,9 +28,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.ProgramFile
 import com.example.ui.IdeViewModel
-import com.example.ui.ai.AiAssistScreen
 import com.example.ui.browser.BrowserWindow
+import com.example.ui.components.CreateFileDialog
+import com.example.ui.components.CreateFolderDialog
+import com.example.ui.components.SaveFileAsDialog
 import com.example.ui.editor.JsEditor
+import com.example.ui.explorer.ProjectDrawerContent
 import com.example.ui.libraries.LibrariesScreen
 import com.example.ui.settings.SettingsScreen
 import com.example.ui.terminal.ConsoleTerminal
@@ -71,20 +73,30 @@ fun MainLayout(viewModel: IdeViewModel) {
     val libraries by viewModel.libraries.collectAsStateWithLifecycle()
     val runBundle by viewModel.runCodeEvent.collectAsStateWithLifecycle()
 
-    // Dialog state for creating a new file
+    // Dialog trigger states
     var showCreateDialog by remember { mutableStateOf(false) }
-    var newFileName by remember { mutableStateOf("") }
-    var newFileLang by remember { mutableStateOf("javascript") }
-
-    // Folder states
     var showCreateFolderDialog by remember { mutableStateOf(false) }
-    var newFolderName by remember { mutableStateOf("") }
+    var showSaveAsDialog by remember { mutableStateOf(false) }
     var selectedFolderForNewFile by remember { mutableStateOf("") }
 
-    // Save As states
-    var showSaveAsDialog by remember { mutableStateOf(false) }
-    var saveAsNewName by remember { mutableStateOf("") }
-    var saveAsFolderName by remember { mutableStateOf("") }
+    // SAF (Storage Access Framework) System file selectors
+    val openDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri ->
+            if (uri != null) {
+                viewModel.openExternalFile(context, uri)
+            }
+        }
+    )
+
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+        onResult = { uri ->
+            if (uri != null) {
+                viewModel.saveCurrentAsExternal(context, uri)
+            }
+        }
+    )
 
     // Screen configuration check for Android 16 split-layout
     val configuration = LocalConfiguration.current
@@ -92,13 +104,13 @@ fun MainLayout(viewModel: IdeViewModel) {
 
     // Visual theme colors matching Professional Polish Theme
     val darkMainColor = Color(0xFF1C1B1F)
-    val lightMainColor = Color(0xFFF1F5F9)
+    val lightMainColor = Color(0xFFFAFAFA)
     val headerBgColor = if (viewModel.isDarkMode) darkMainColor else lightMainColor
     val textColor = if (viewModel.isDarkMode) Color(0xFFE6E1E5) else Color(0xFF1C1B1F)
     val activePillColor = if (viewModel.isDarkMode) Color(0xFF4A4458) else Color(0xFFE8DEF8)
     val bottomBarBgColor = if (viewModel.isDarkMode) Color(0xFF25232A) else Color(0xFFF1F5F9)
 
-    // Export Intent helper
+    // Share / Export file contents helper
     val exportFile: (ProgramFile) -> Unit = { file ->
         val sendIntent = Intent().apply {
             action = Intent.ACTION_SEND
@@ -115,212 +127,39 @@ fun MainLayout(viewModel: IdeViewModel) {
         drawerContent = {
             ModalDrawerSheet(
                 drawerContainerColor = if (viewModel.isDarkMode) Color(0xFF111318) else Color(0xFFFFFFFF),
-                modifier = Modifier.width(300.dp)
+                modifier = Modifier.width(320.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "📁 Project File Explorer",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp,
-                        color = textColor,
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 16.dp)
-                    ) {
-                        Button(
-                            onClick = { 
-                                selectedFolderForNewFile = ""
-                                showCreateDialog = true 
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "New File", modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text("New File", fontSize = 10.sp)
-                        }
-                        Button(
-                            onClick = { showCreateFolderDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                        ) {
-                            Icon(Icons.Default.CreateNewFolder, contentDescription = "New Folder", modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text("Folder", fontSize = 10.sp)
-                        }
-                        Button(
-                            onClick = { 
-                                currentFile?.let {
-                                    saveAsNewName = it.name.substringBeforeLast(".")
-                                    saveAsFolderName = it.folder
-                                    showSaveAsDialog = true
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                        ) {
-                            Icon(Icons.Default.Save, contentDescription = "Save As", modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text("Save As", fontSize = 10.sp)
-                        }
+                ProjectDrawerContent(
+                    viewModel = viewModel,
+                    files = files,
+                    currentFile = currentFile,
+                    onOpenExternalFileTriggered = {
+                        scope.launch { drawerState.close() }
+                        openDocumentLauncher.launch(arrayOf("text/plain", "application/javascript", "text/html", "text/css", "*/*"))
+                    },
+                    onSaveAsExternalTriggered = {
+                        scope.launch { drawerState.close() }
+                        val active = currentFile
+                        val suggestion = active?.name ?: "untitled.js"
+                        createDocumentLauncher.launch(suggestion)
+                    },
+                    onNewFileTriggered = { folder ->
+                        selectedFolderForNewFile = folder
+                        showCreateDialog = true
+                        scope.launch { drawerState.close() }
+                    },
+                    onNewFolderTriggered = {
+                        showCreateFolderDialog = true
+                        scope.launch { drawerState.close() }
+                    },
+                    onSaveAsLocalTriggered = {
+                        showSaveAsDialog = true
+                        scope.launch { drawerState.close() }
+                    },
+                    onDismissDrawer = {
+                        scope.launch { drawerState.close() }
                     }
-
-                    HorizontalDivider(color = textColor.copy(alpha = 0.1f), thickness = 1.dp)
-
-                    // Files selection list grouped by folder!
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .padding(top = 12.dp)
-                    ) {
-                        val grouped = files.groupBy { it.folder }
-                        
-                        grouped.forEach { (folderName, folderFiles) ->
-                            item {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp, horizontal = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = if (folderName.isEmpty()) Icons.Default.FolderOpen else Icons.Default.Folder,
-                                            contentDescription = "Folder Icon",
-                                            tint = if (folderName.isEmpty()) Color(0xFF62B6CB) else Color(0xFFFFB703),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = if (folderName.isEmpty()) "Workspace (Root)" else folderName,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = textColor.copy(alpha = 0.8f)
-                                        )
-                                    }
-                                    
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        // Add file directly inside this folder
-                                        IconButton(
-                                            onClick = {
-                                                selectedFolderForNewFile = folderName
-                                                showCreateDialog = true
-                                            },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Add,
-                                                contentDescription = "Add File to Folder",
-                                                tint = textColor.copy(alpha = 0.6f),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-
-                                        // Delete whole folder button
-                                        if (folderName.isNotEmpty()) {
-                                            IconButton(
-                                                onClick = { viewModel.deleteFolder(folderName) },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Delete,
-                                                    contentDescription = "Delete Folder",
-                                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            items(folderFiles) { file ->
-                                val isSelected = file.id == currentFile?.id
-                                val fileBgColor = if (isSelected) activePillColor else Color.Transparent
-
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 16.dp) // Nested Indentation
-                                        .background(fileBgColor, shape = MaterialTheme.shapes.small)
-                                        .clickable {
-                                            viewModel.selectFile(file.id)
-                                            scope.launch { drawerState.close() }
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = when (file.language) {
-                                                "html" -> Icons.Default.Language
-                                                "css" -> Icons.Default.Css
-                                                else -> Icons.Default.Code
-                                            },
-                                            contentDescription = "File Icon",
-                                            tint = when (file.language) {
-                                                "html" -> Color(0xFFE34F26)
-                                                "css" -> Color(0xFF264DE4)
-                                                else -> Color(0xFFF7DF1E)
-                                            },
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Text(
-                                            text = file.name,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 13.sp,
-                                            color = textColor
-                                        )
-                                    }
-
-                                    // Delete button (do not allow deleting if it's the last file)
-                                    if (files.size > 1) {
-                                        IconButton(
-                                            onClick = { viewModel.deleteFile(file) },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Delete,
-                                                contentDescription = "Delete",
-                                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    Text(
-                        text = "JavaScript IDE v1.0",
-                        fontSize = 11.sp,
-                        color = textColor.copy(alpha = 0.4f),
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    )
-                }
+                )
             }
         }
     ) {
@@ -344,7 +183,7 @@ fun MainLayout(viewModel: IdeViewModel) {
                                     fontFamily = FontFamily.Monospace
                                 )
                                 Text(
-                                    text = "Commute coding safe sandbox",
+                                    text = if (currentFile?.externalUri != null) "Linked to Device File (Auto-save)" else "Commute coding safe sandbox",
                                     fontSize = 10.sp,
                                     color = textColor.copy(alpha = 0.5f)
                                 )
@@ -362,7 +201,7 @@ fun MainLayout(viewModel: IdeViewModel) {
                                 }
                             }
 
-                            // Share / Save to Files action
+                            // Share / Export Action
                             IconButton(
                                 onClick = {
                                     currentFile?.let { exportFile(it) }
@@ -385,8 +224,7 @@ fun MainLayout(viewModel: IdeViewModel) {
                         Triple(1, "Browser", Icons.Default.Language),
                         Triple(2, "Terminal", Icons.Default.Terminal),
                         Triple(3, "Libraries", Icons.Default.Inventory),
-                        Triple(4, "AI Coach", Icons.Default.AutoAwesome),
-                        Triple(5, "Settings", Icons.Default.Settings)
+                        Triple(4, "Settings", Icons.Default.Settings)
                     )
                     items.forEach { (index, label, icon) ->
                         NavigationBarItem(
@@ -414,32 +252,19 @@ fun MainLayout(viewModel: IdeViewModel) {
                 if (isWideScreen) {
                     // Split screen for large/wide displays (Android 16 optimization)
                     Row(modifier = Modifier.fillMaxSize()) {
-                        // Left Column: Workspace Code Editor + Collapsible terminal
+                        // Left Column: Workspace Code Editor (No small terminal under it!)
                         Column(
                             modifier = Modifier
                                 .weight(1.2f)
                                 .fillMaxHeight()
                         ) {
                             JsEditor(
+                                fileId = currentFile?.id ?: 0,
                                 code = viewModel.editorCode,
                                 onCodeChanged = { viewModel.updateEditorCode(it) },
                                 isDarkMode = viewModel.isDarkMode,
                                 isAutocompleteEnabled = viewModel.isAutocompleteEnabled,
-                                modifier = Modifier.weight(1f)
-                            )
-                            
-                            ConsoleTerminal(
-                                logs = logs,
-                                onClearLogs = { viewModel.clearLogs() },
-                                isDarkMode = viewModel.isDarkMode,
-                                isAutoTerminateEnabled = viewModel.isAutoTerminateEnabled,
-                                onToggleAutoTerminate = { viewModel.toggleAutoTerminate() },
-                                terminalsList = viewModel.terminals,
-                                activeTerminalId = viewModel.activeTerminalId,
-                                onSelectTerminal = { viewModel.activeTerminalId = it },
-                                onCreateTerminal = { viewModel.createTerminal() },
-                                onDeleteTerminal = { viewModel.deleteTerminal(it) },
-                                modifier = Modifier.height(180.dp)
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
 
@@ -507,17 +332,6 @@ fun MainLayout(viewModel: IdeViewModel) {
                                     )
                                 }
                                 4 -> {
-                                    AiAssistScreen(
-                                        responseText = viewModel.aiResponseText,
-                                        isLoading = viewModel.isAiLoading,
-                                        onAskQuestion = { viewModel.askAiAssistant(it) },
-                                        onApplyCodeToEditor = { viewModel.applyAiCodeToEditor(it) },
-                                        onSaveAsProject = { viewModel.splitAndSaveAiResponseAsProject(it, viewModel.aiResponseText) },
-                                        isDarkMode = viewModel.isDarkMode,
-                                        isVoiceSupportEnabled = viewModel.isVoiceSupportEnabled
-                                    )
-                                }
-                                5 -> {
                                     SettingsScreen(
                                         isDarkMode = viewModel.isDarkMode,
                                         onToggleDarkMode = { viewModel.toggleDarkMode() },
@@ -538,29 +352,14 @@ fun MainLayout(viewModel: IdeViewModel) {
                     // Mobile-first single pane tab layout
                     when (viewModel.selectedTab) {
                         0 -> {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                JsEditor(
-                                    code = viewModel.editorCode,
-                                    onCodeChanged = { viewModel.updateEditorCode(it) },
-                                    isDarkMode = viewModel.isDarkMode,
-                                    isAutocompleteEnabled = viewModel.isAutocompleteEnabled,
-                                    modifier = Modifier.weight(1.0f)
-                                )
-                                
-                                ConsoleTerminal(
-                                    logs = logs,
-                                    onClearLogs = { viewModel.clearLogs() },
-                                    isDarkMode = viewModel.isDarkMode,
-                                    isAutoTerminateEnabled = viewModel.isAutoTerminateEnabled,
-                                    onToggleAutoTerminate = { viewModel.toggleAutoTerminate() },
-                                    terminalsList = viewModel.terminals,
-                                    activeTerminalId = viewModel.activeTerminalId,
-                                    onSelectTerminal = { viewModel.activeTerminalId = it },
-                                    onCreateTerminal = { viewModel.createTerminal() },
-                                    onDeleteTerminal = { viewModel.deleteTerminal(it) },
-                                    modifier = Modifier.height(180.dp)
-                                )
-                            }
+                            JsEditor(
+                                fileId = currentFile?.id ?: 0,
+                                code = viewModel.editorCode,
+                                onCodeChanged = { viewModel.updateEditorCode(it) },
+                                isDarkMode = viewModel.isDarkMode,
+                                isAutocompleteEnabled = viewModel.isAutocompleteEnabled,
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
                         1 -> {
                             BrowserWindow(
@@ -613,17 +412,6 @@ fun MainLayout(viewModel: IdeViewModel) {
                             )
                         }
                         4 -> {
-                            AiAssistScreen(
-                                responseText = viewModel.aiResponseText,
-                                isLoading = viewModel.isAiLoading,
-                                onAskQuestion = { viewModel.askAiAssistant(it) },
-                                onApplyCodeToEditor = { viewModel.applyAiCodeToEditor(it) },
-                                onSaveAsProject = { viewModel.splitAndSaveAiResponseAsProject(it, viewModel.aiResponseText) },
-                                isDarkMode = viewModel.isDarkMode,
-                                isVoiceSupportEnabled = viewModel.isVoiceSupportEnabled
-                            )
-                        }
-                        5 -> {
                             SettingsScreen(
                                 isDarkMode = viewModel.isDarkMode,
                                 onToggleDarkMode = { viewModel.toggleDarkMode() },
@@ -643,158 +431,26 @@ fun MainLayout(viewModel: IdeViewModel) {
         }
     }
 
-    // New File creation dialog
+    // Dialog components
     if (showCreateDialog) {
-        AlertDialog(
-            onDismissRequest = { showCreateDialog = false },
-            title = { 
-                Text(
-                    text = if (selectedFolderForNewFile.isNotEmpty()) "New File in $selectedFolderForNewFile" else "Create New File"
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = newFileName,
-                        onValueChange = { newFileName = it },
-                        label = { Text("File Name (e.g. main)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    
-                    Text("Select Language File Type:", style = MaterialTheme.typography.bodySmall)
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        listOf("javascript", "html", "css").forEach { lang ->
-                            val isSelected = newFileLang == lang
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { newFileLang = lang },
-                                label = { Text(lang.uppercase()) }
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newFileName.isNotBlank()) {
-                            viewModel.createFile(
-                                name = newFileName.trim(), 
-                                language = newFileLang, 
-                                folder = selectedFolderForNewFile
-                            )
-                            newFileName = ""
-                            showCreateDialog = false
-                        }
-                    }
-                ) {
-                    Text("Create")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) {
-                    Text("Cancel")
-                }
-            }
+        CreateFileDialog(
+            selectedFolder = selectedFolderForNewFile,
+            onDismiss = { showCreateDialog = false },
+            viewModel = viewModel
         )
     }
 
-    // New Project Folder creation dialog
     if (showCreateFolderDialog) {
-        AlertDialog(
-            onDismissRequest = { showCreateFolderDialog = false },
-            title = { Text("Create Project Folder") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Creating a folder will automatically scaffold a 3-file web project (index.html, style.css, script.js) inside it.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = newFolderName,
-                        onValueChange = { newFolderName = it },
-                        label = { Text("Folder Name (e.g. login_page)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newFolderName.isNotBlank()) {
-                            val folderNameClean = newFolderName.trim().replace(" ", "_")
-                            // Scaffold a complete 3-file workspace inside the project folder
-                            viewModel.createFile("index.html", "html", folderNameClean)
-                            viewModel.createFile("style.css", "css", folderNameClean)
-                            viewModel.createFile("script.js", "javascript", folderNameClean)
-                            newFolderName = ""
-                            showCreateFolderDialog = false
-                        }
-                    }
-                ) {
-                    Text("Create Project")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateFolderDialog = false }) {
-                    Text("Cancel")
-                }
-            }
+        CreateFolderDialog(
+            onDismiss = { showCreateFolderDialog = false },
+            viewModel = viewModel
         )
     }
 
-    // Save File As dialog
     if (showSaveAsDialog) {
-        AlertDialog(
-            onDismissRequest = { showSaveAsDialog = false },
-            title = { Text("Save File As") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "Save a copy of the current file with a new name.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = saveAsNewName,
-                        onValueChange = { saveAsNewName = it },
-                        label = { Text("New File Name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = saveAsFolderName,
-                        onValueChange = { saveAsFolderName = it },
-                        label = { Text("Folder Name (leave empty for Root)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (saveAsNewName.isNotBlank()) {
-                            viewModel.saveFileAs(saveAsNewName.trim(), saveAsFolderName.trim())
-                            showSaveAsDialog = false
-                        }
-                    }
-                ) {
-                    Text("Save As")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSaveAsDialog = false }) {
-                    Text("Cancel")
-                }
-            }
+        SaveFileAsDialog(
+            onDismiss = { showSaveAsDialog = false },
+            viewModel = viewModel
         )
     }
 }

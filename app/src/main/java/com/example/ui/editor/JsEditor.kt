@@ -26,30 +26,21 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun JsEditor(
+    fileId: Int,
     code: String,
     onCodeChanged: (String) -> Unit,
     isDarkMode: Boolean,
     isAutocompleteEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
-    // Keep a state for TextFieldValue to track cursor position
-    var textFieldValue by remember {
+    // Keep a state for TextFieldValue to track cursor position, keyed on fileId
+    var textFieldValue by remember(fileId) {
         mutableStateOf(
             TextFieldValue(
                 text = code,
                 selection = androidx.compose.ui.text.TextRange(code.length)
             )
         )
-    }
-
-    // Only update textFieldValue text from outside if the text actually differs
-    LaunchedEffect(code) {
-        if (code != textFieldValue.text) {
-            textFieldValue = TextFieldValue(
-                text = code,
-                selection = androidx.compose.ui.text.TextRange(code.length)
-            )
-        }
     }
 
     val editorBgColor = if (isDarkMode) Color(0xFF1C1B1F) else Color(0xFFFAFAFA)
