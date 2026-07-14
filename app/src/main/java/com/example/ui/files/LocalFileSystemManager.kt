@@ -19,7 +19,21 @@ object LocalFileSystemManager {
      * Gets the workspace root directory.
      */
     fun getWorkspaceRoot(context: Context): File {
-        val root = File(context.filesDir, "workspace")
+        val hasPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
+        val root = if (hasPermission) {
+            File(android.os.Environment.getExternalStorageDirectory(), "Documents/CodeXEditor")
+        } else {
+            File(context.filesDir, "workspace")
+        }
+
         if (!root.exists()) {
             root.mkdirs()
         }
@@ -36,7 +50,7 @@ object LocalFileSystemManager {
             // Write default index.js
             val indexJs = File(root, "index.js")
             try {
-                indexJs.writeText("""// 🚀 Welcome to JavaScript IDE!
+                indexJs.writeText("""// 🚀 Welcome to CodeX Editor!
 // Tap "Run Code" above to execute this script.
 // Outputs will show up in the Debug Terminal below.
 
@@ -81,34 +95,7 @@ setTimeout(() => {
 <html>
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            background-color: #0d1117;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            color: #c9d1d9;
-        }
-        canvas {
-            display: block;
-            width: 100vw;
-            height: 100vh;
-        }
-        .hud {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            pointer-events: none;
-            background: rgba(22, 27, 34, 0.85);
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid #30363d;
-            max-width: 250px;
-        }
-        h3 { margin: 0 0 5px 0; font-size: 16px; color: #58a6ff; }
-        p { margin: 0; font-size: 12px; color: #8b949e; line-height: 1.4; }
-    </style>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="hud">
@@ -202,6 +189,66 @@ setTimeout(() => {
 </html>""")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to prepopulate canvas_art.html", e)
+            }
+
+            // Write style.css
+            val styleCss = File(root, "style.css")
+            try {
+                styleCss.writeText("""body, html {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #0d1117;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #c9d1d9;
+}
+canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+}
+.hud {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    pointer-events: none;
+    background: rgba(22, 27, 34, 0.85);
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid #30363d;
+    max-width: 250px;
+}
+h3 { margin: 0 0 5px 0; font-size: 16px; color: #58a6ff; }
+p { margin: 0; font-size: 12px; color: #8b949e; line-height: 1.4; }""")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to prepopulate style.css", e)
+            }
+
+            // Write readme.txt
+            val readmeTxt = File(root, "readme.txt")
+            try {
+                readmeTxt.writeText("""==================================================
+🚀 CodeX Editor - Real Local Device File Management
+==================================================
+
+CodeX Editor operates directly on your physical device storage:
+Folder Path: /Internal Storage/Documents/CodeXEditor/
+
+📁 Supported File Extension Formats:
+- .html (Hypertext Markup Language)
+- .css (Cascading Style Sheets)
+- .js (JavaScript Scripting)
+- .txt (Plain Text Documentation)
+
+✨ Features:
+- Direct local file save/auto-save to your device
+- Storage-access security ensuring no personal data is ever compromised
+- 100% Offline-first capability with absolute privacy protection
+- Direct code execution with fully responsive interactive previews
+
+Have fun writing code offline safely!""")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to prepopulate readme.txt", e)
             }
         }
     }

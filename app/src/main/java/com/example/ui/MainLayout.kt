@@ -508,7 +508,68 @@ fun MainLayout(viewModel: IdeViewModel) {
             onDismiss = { showGuide = false }
         )
     }
+
+    if (!viewModel.isStoragePermissionGranted) {
+        StoragePermissionDialog(viewModel = viewModel)
     }
+    }
+}
+
+@Composable
+fun StoragePermissionDialog(viewModel: IdeViewModel) {
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = { /* Force selection */ },
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(48.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Storage Permission Required",
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp,
+                color = if (viewModel.isDarkMode) Color.White else Color.Black
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "To open, edit, create, and save files (.html, .js, .txt, .css) directly on your device storage, CodeX Editor requires standard Storage Access permissions.",
+                    fontSize = 14.sp,
+                    color = if (viewModel.isDarkMode) Color(0xFFCAC4D0) else Color(0xFF49454F)
+                )
+                Text(
+                    text = "🔒 Privacy Shield Protection:\nNone of your personal files, private keys, or source codes are processed outside your device. Everything runs 100% locally and offline. Your privacy is fully secured.",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    viewModel.requestStoragePermission(context)
+                }
+            ) {
+                Text("Grant Permission")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    (context as? android.app.Activity)?.finish()
+                }
+            ) {
+                Text("Close App")
+            }
+        }
+    )
 }
 
 /**

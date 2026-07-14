@@ -81,8 +81,8 @@ fun ProjectDrawerContent(
             border = BorderStroke(1.dp, borderColor),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(8.dp)) {
-                // Row 1: New File & New Project
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Row 1: New File & New Folder
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -112,68 +112,30 @@ fun ProjectDrawerContent(
                     ) {
                         Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("New Project", fontSize = 11.sp, maxLines = 1)
+                        Text("New Folder", fontSize = 11.sp, maxLines = 1)
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Row 2: Open File (Device SAF)
-                OutlinedButton(
-                    onClick = onOpenExternalFileTriggered,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = textColor),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Open Device File", fontSize = 12.sp)
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Advanced File Manager Button
+                // Row 2: Advanced File Manager Button
                 Button(
                     onClick = onOpenFileManagerTriggered,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                         contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Advanced File Manager", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Direct Save to My Files Button!
-                Button(
-                    onClick = onSaveToPublicDocumentsTriggered,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column(horizontalAlignment = Alignment.Start) {
-                        Text("Save directly to My Files", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Text("Saves to Local Documents/CommuteCodeSandbox", fontSize = 9.sp, color = textColor.copy(alpha = 0.6f))
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Row 3: Save / Save As External
+                // Row 3: Direct disk operations Save & Save As
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Quick Manual Save
                     OutlinedButton(
                         onClick = {
                             viewModel.saveCurrentFileImmediately()
@@ -185,32 +147,22 @@ fun ProjectDrawerContent(
                     ) {
                         Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Save", fontSize = 11.sp)
+                        Text("Save File", fontSize = 11.sp)
                     }
 
-                    // Save As Device File (SAF export)
                     Button(
-                        onClick = onSaveAsExternalTriggered,
+                        onClick = onSaveAsLocalTriggered,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.tertiary,
-                            contentColor = MaterialTheme.colorScheme.onTertiary
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                         ),
                         contentPadding = PaddingValues(horizontal = 8.dp),
-                        modifier = Modifier.weight(1.2f)
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.SaveAs, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Save As Copy", fontSize = 11.sp, maxLines = 1)
+                        Text("Save As", fontSize = 11.sp, maxLines = 1)
                     }
-                }
-                
-                Spacer(modifier = Modifier.height(4.dp))
-                // Save As Local Workspace File option
-                TextButton(
-                    onClick = onSaveAsLocalTriggered,
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                ) {
-                    Text("Save As (Local Workspace)", fontSize = 11.sp, color = textColor.copy(alpha = 0.7f))
                 }
             }
         }

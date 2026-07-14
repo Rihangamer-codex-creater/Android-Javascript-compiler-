@@ -61,6 +61,81 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     var isVoiceSupportEnabled by mutableStateOf(false)
     var isAutoTerminateEnabled by mutableStateOf(true)
 
+    // Storage permission state
+    var isStoragePermissionGranted by mutableStateOf(false)
+        private set
+
+    fun checkStoragePermission(context: android.content.Context) {
+        isStoragePermissionGranted = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
+        if (isStoragePermissionGranted) {
+            val root = com.example.ui.files.LocalFileSystemManager.getWorkspaceRoot(context)
+            if (currentPhysicalDir == null) {
+                setPhysicalDir(root)
+            }
+            syncWithDeviceStorage()
+        }
+    }
+
+    fun requestStoragePermission(context: android.content.Context) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            try {
+                val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                try {
+                    val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                } catch (ex: Exception) {
+                    Log.e("IdeViewModel", "Failed to launch manage all files permission screen", ex)
+                }
+            }
+        } else {
+            // Send signal to MainActivity to request legacy permissions
+            val intent = android.content.Intent(context, com.example.MainActivity::class.java).apply {
+                putExtra("request_legacy_permissions", true)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            context.startActivity(intent)
+        }
+    }
+
+    private var hasSyncedOnce = false
+
+    fun syncWithDeviceStorage() {
+        if (hasSyncedOnce) return
+        hasSyncedOnce = true
+        viewModelScope.launch {
+            try {
+                com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+                // Select first file if none is current
+                val current = repository.getFilesList().find { it.isCurrent }
+                if (current == null) {
+                    val all = repository.getFilesList()
+                    if (all.isNotEmpty()) {
+                        repository.selectFile(all.first().id)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("IdeViewModel", "Failed syncWithDeviceStorage", e)
+            } finally {
+                hasSyncedOnce = false
+            }
+        }
+    }
+
     // --- Device Physical Storage File Manager ---
     val externalWorkspaceUri = MutableStateFlow<String?>(null)
     val externalWorkspaceName = MutableStateFlow<String?>(null)
@@ -120,6 +195,172 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     // Search inside file states
     var searchActive by mutableStateOf(false)
     var searchQuery by mutableStateOf("")
+
+    // Physical File Manager States and Methods
+    var currentPhysicalDir by mutableStateOf<java.io.File?>(null)
+        private set
+    val filesInCurrentDir = androidx.compose.runtime.mutableStateListOf<java.io.File>()
+
+    fun setPhysicalDir(dir: java.io.File) {
+        currentPhysicalDir = dir
+        refreshFilesInCurrentDir()
+    }
+
+    fun refreshFilesInCurrentDir() {
+        val dir = currentPhysicalDir ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val list = dir.listFiles()?.toList() ?: emptyList()
+            val filtered = list.filter {
+                it.isDirectory || it.name.endsWith(".html") || it.name.endsWith(".js") || it.name.endsWith(".css") || it.name.endsWith(".txt")
+            }.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+            
+            withContext(Dispatchers.Main) {
+                filesInCurrentDir.clear()
+                filesInCurrentDir.addAll(filtered)
+            }
+        }
+    }
+
+    fun openPhysicalFile(context: android.content.Context, file: java.io.File) {
+        viewModelScope.launch {
+            try {
+                val content = file.readText()
+                val language = com.example.ui.files.ExternalFileHelper.detectLanguage(file.name)
+                
+                val existing = repository.getFilesList().find { it.externalUri == file.absolutePath }
+                if (existing != null) {
+                    val updated = existing.copy(content = content, isCurrent = true, lastModified = System.currentTimeMillis())
+                    repository.updateFile(updated)
+                    repository.selectFile(updated.id)
+                } else {
+                    db.programFileDao().clearCurrentStatus()
+                    val newProgramFile = ProgramFile(
+                        name = file.name,
+                        content = content,
+                        language = language,
+                        isCurrent = true,
+                        folder = file.parentFile?.name ?: "",
+                        externalUri = file.absolutePath
+                    )
+                    val id = repository.insertFile(newProgramFile)
+                    repository.selectFile(id)
+                }
+                
+                editorCode = content
+                
+                viewModelScope.launch {
+                    com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+                }
+            } catch (e: Exception) {
+                Log.e("IdeViewModel", "Failed to open physical file: ${file.absolutePath}", e)
+                android.widget.Toast.makeText(context, "Error opening file: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun createPhysicalFile(context: android.content.Context, parentDir: java.io.File, name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val file = java.io.File(parentDir, name)
+                if (!file.exists()) {
+                    file.createNewFile()
+                    file.writeText("")
+                }
+                refreshFilesInCurrentDir()
+                withContext(Dispatchers.Main) {
+                    openPhysicalFile(context, file)
+                }
+            } catch (e: Exception) {
+                Log.e("IdeViewModel", "Failed to create file", e)
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Failed to create file: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun createPhysicalFolder(context: android.content.Context, parentDir: java.io.File, name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val folder = java.io.File(parentDir, name)
+                if (!folder.exists()) {
+                    folder.mkdirs()
+                }
+                refreshFilesInCurrentDir()
+            } catch (e: Exception) {
+                Log.e("IdeViewModel", "Failed to create folder", e)
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Failed to create folder: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun renamePhysicalItem(context: android.content.Context, item: java.io.File, newName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val dest = java.io.File(item.parentFile, newName)
+                if (item.renameTo(dest)) {
+                    val existing = repository.getFilesList().find { it.externalUri == item.absolutePath }
+                    if (existing != null) {
+                        val updated = existing.copy(
+                            name = newName,
+                            externalUri = dest.absolutePath,
+                            language = com.example.ui.files.ExternalFileHelper.detectLanguage(newName)
+                        )
+                        repository.updateFile(updated)
+                    }
+                    refreshFilesInCurrentDir()
+                }
+            } catch (e: Exception) {
+                Log.e("IdeViewModel", "Failed to rename physical item", e)
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Failed to rename: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun deletePhysicalItem(context: android.content.Context, item: java.io.File) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (item.isDirectory) {
+                    item.deleteRecursively()
+                } else {
+                    item.delete()
+                    val existing = repository.getFilesList().find { it.externalUri == item.absolutePath }
+                    if (existing != null) {
+                        repository.deleteFile(existing)
+                    }
+                }
+                refreshFilesInCurrentDir()
+            } catch (e: Exception) {
+                Log.e("IdeViewModel", "Failed to delete physical item", e)
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Failed to delete: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun saveActiveFileAs(context: android.content.Context, parentDir: java.io.File, name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val file = java.io.File(parentDir, name)
+                file.writeText(editorCode)
+                refreshFilesInCurrentDir()
+                withContext(Dispatchers.Main) {
+                    openPhysicalFile(context, file)
+                    android.widget.Toast.makeText(context, "Saved file as $name successfully", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e("IdeViewModel", "Failed to save file as", e)
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Save As failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     init {
         // Initialize default terminal
@@ -213,8 +454,23 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         saveJob?.cancel()
         saveScope.launch {
             try {
-                // Save physically first if it's not external
-                if (file.externalUri == null) {
+                val path = file.externalUri ?: java.io.File(com.example.ui.files.LocalFileSystemManager.getWorkspaceRoot(getApplication()), file.name).absolutePath
+                
+                if (path.startsWith("/")) {
+                    try {
+                        val physicalFile = java.io.File(path)
+                        physicalFile.writeText(editorCode)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed physical write to $path", e)
+                    }
+                } else if (path.startsWith("content://")) {
+                    try {
+                        val uri = android.net.Uri.parse(path)
+                        com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, editorCode)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed SAF write to $path", e)
+                    }
+                } else {
                     com.example.ui.files.LocalFileSystemManager.saveFile(
                         getApplication(),
                         file.name,
@@ -224,16 +480,6 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 repository.updateFile(file.copy(content = editorCode, lastModified = System.currentTimeMillis()))
-                
-                // Also write back to external system file URI if linked
-                file.externalUri?.let { uriStr ->
-                    try {
-                        val uri = android.net.Uri.parse(uriStr)
-                        com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, editorCode)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to auto-save to external Uri: $uriStr", e)
-                    }
-                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save file in saveScope context", e)
             }
