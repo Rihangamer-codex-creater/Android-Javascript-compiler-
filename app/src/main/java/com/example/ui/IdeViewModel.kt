@@ -26,6 +26,8 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     // Debounced database saving job to eliminate typing lag
     private var saveJob: kotlinx.coroutines.Job? = null
+    private val saveScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+    private var loadedFileId: Int? = null
 
     // Speech and voice support
     val voiceAssistant = VoiceAssistant(application)
@@ -58,6 +60,30 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     var isAutocompleteEnabled by mutableStateOf(true)
     var isVoiceSupportEnabled by mutableStateOf(false)
     var isAutoTerminateEnabled by mutableStateOf(true)
+
+    // --- Device Physical Storage File Manager ---
+    val externalWorkspaceUri = MutableStateFlow<String?>(null)
+    val externalWorkspaceName = MutableStateFlow<String?>(null)
+    val externalFilesList = androidx.compose.runtime.mutableStateListOf<ExternalStorageItem>()
+    val currentExternalPath = MutableStateFlow("")
+
+    // --- File Saving & Management System ---
+    var isAutosaveEnabled by mutableStateOf(true)
+    var isBrowserGridView by mutableStateOf(false)
+    var fileBrowserSortBy by mutableStateOf("name_asc")
+    var fileBrowserSearchQuery by mutableStateOf("")
+    var currentBrowserFolder by mutableStateOf("")
+
+    val recentlyOpenedIds = androidx.compose.runtime.mutableStateListOf<Int>()
+    val favoriteFolders = androidx.compose.runtime.mutableStateListOf<String>()
+
+    // Unsaved work recovery and dirty tracking
+    val hasUnsavedChanges: Boolean
+        get() = currentFile.value != null && editorCode != currentFile.value?.content
+
+    // We can show warning dialogs
+    var showUnsavedChangesWarningForId by mutableStateOf<Int?>(null)
+    var showUnsavedChangesWarningForAction by mutableStateOf<(() -> Unit)?>(null)
 
     // Multiple terminals support
     var activeTerminalId by mutableStateOf(1)
@@ -105,19 +131,78 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
             isJsExecutionEnabled = repository.getSetting("isJsExecutionEnabled", "true").toBoolean()
             isAutocompleteEnabled = repository.getSetting("isAutocompleteEnabled", "true").toBoolean()
             isAutoTerminateEnabled = repository.getSetting("isAutoTerminateEnabled", "true").toBoolean()
+            isAutosaveEnabled = repository.getSetting("isAutosaveEnabled", "true").toBoolean()
+            isBrowserGridView = repository.getSetting("isBrowserGridView", "false").toBoolean()
+            fileBrowserSortBy = repository.getSetting("fileBrowserSortBy", "name_asc")
+
+            val extUri = repository.getSetting("externalWorkspaceUri", "")
+            if (extUri.isNotEmpty()) {
+                externalWorkspaceUri.value = extUri
+                externalWorkspaceName.value = repository.getSetting("externalWorkspaceName", "")
+                try {
+                    refreshExternalFiles(application)
+                } catch (e: Exception) {
+                    Log.w("IdeViewModel", "Could not restore external files list on init", e)
+                }
+            }
+
+            val savedFavorites = repository.getSetting("favoriteFolders", "")
+            if (savedFavorites.isNotEmpty()) {
+                favoriteFolders.clear()
+                favoriteFolders.addAll(savedFavorites.split(","))
+            }
+
+            val savedRecents = repository.getSetting("recentlyOpenedIds", "")
+            if (savedRecents.isNotEmpty()) {
+                recentlyOpenedIds.clear()
+                recentlyOpenedIds.addAll(savedRecents.split(",").mapNotNull { it.toIntOrNull() })
+            }
+
             val voiceSaved = repository.getSetting("isVoiceSupportEnabled", "false").toBoolean()
             isVoiceSupportEnabled = voiceSaved
             voiceAssistant.isEnabled = voiceSaved
 
-            // Prepopulate default samples & npm references
-            repository.prepopulateIfNeeded()
+            // Synchronize physical filesystem with Room database
+            try {
+                com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(application, db)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed initial workspace sync", e)
+            }
 
-            // Synchronize current file text with editorCode
+            // Synchronize current file text with editorCode only when active file ID changes
             currentFile.collect { file ->
-                if (file != null && editorCode != file.content) {
-                    editorCode = file.content
+                if (file != null) {
+                    if (loadedFileId != file.id) {
+                        loadedFileId = file.id
+                        editorCode = file.content
+                        addFileToRecentlyOpened(file.id)
+                    }
+                } else {
+                    loadedFileId = null
+                    editorCode = ""
                 }
             }
+        }
+    }
+
+    fun toggleAutosave() {
+        isAutosaveEnabled = !isAutosaveEnabled
+        viewModelScope.launch {
+            repository.saveSetting("isAutosaveEnabled", isAutosaveEnabled.toString())
+        }
+    }
+
+    fun toggleBrowserGridView() {
+        isBrowserGridView = !isBrowserGridView
+        viewModelScope.launch {
+            repository.saveSetting("isBrowserGridView", isBrowserGridView.toString())
+        }
+    }
+
+    fun changeFileBrowserSortBy(sortBy: String) {
+        fileBrowserSortBy = sortBy
+        viewModelScope.launch {
+            repository.saveSetting("fileBrowserSortBy", sortBy)
         }
     }
 
@@ -126,17 +211,31 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     fun saveCurrentFileImmediately() {
         val file = currentFile.value ?: return
         saveJob?.cancel()
-        viewModelScope.launch {
-            repository.updateFile(file.copy(content = editorCode, lastModified = System.currentTimeMillis()))
-            
-            // Also write back to external system file URI if linked
-            file.externalUri?.let { uriStr ->
-                try {
-                    val uri = android.net.Uri.parse(uriStr)
-                    com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, editorCode)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to auto-save to external Uri: $uriStr", e)
+        saveScope.launch {
+            try {
+                // Save physically first if it's not external
+                if (file.externalUri == null) {
+                    com.example.ui.files.LocalFileSystemManager.saveFile(
+                        getApplication(),
+                        file.name,
+                        file.folder,
+                        editorCode
+                    )
                 }
+
+                repository.updateFile(file.copy(content = editorCode, lastModified = System.currentTimeMillis()))
+                
+                // Also write back to external system file URI if linked
+                file.externalUri?.let { uriStr ->
+                    try {
+                        val uri = android.net.Uri.parse(uriStr)
+                        com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, editorCode)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to auto-save to external Uri: $uriStr", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save file in saveScope context", e)
             }
         }
     }
@@ -171,6 +270,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 // Just switch to it and update the content if it changed
                 val updatedFile = alreadyImported.copy(content = content, lastModified = System.currentTimeMillis())
                 repository.updateFile(updatedFile)
+                loadedFileId = null // Force sync to reload file content
                 repository.selectFile(alreadyImported.id)
                 addLog("info", "✓ Opened existing device file: $name")
             } else {
@@ -238,6 +338,25 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Instantly saves the active file directly inside the device's public local Documents
+     * folder under "My Files/Documents/CommuteCodeSandbox/", completely bypassing Google Drive.
+     */
+    fun saveToLocalPublicDocuments(context: android.content.Context) {
+        val file = currentFile.value ?: return
+        saveCurrentFileImmediately() // ensure DB has latest
+        viewModelScope.launch {
+            val successUri = com.example.ui.files.ExternalFileHelper.saveFileToPublicDocuments(context, file.name, editorCode)
+            if (successUri != null) {
+                addLog("info", "✓ Saved directly to My Files -> Documents/CommuteCodeSandbox/${file.name}")
+                android.widget.Toast.makeText(context, "Saved to My Files -> Documents/CommuteCodeSandbox/${file.name}", android.widget.Toast.LENGTH_LONG).show()
+            } else {
+                addLog("error", "Failed to save file to local My Files directory.")
+                android.widget.Toast.makeText(context, "Failed to save to local Documents directory.", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     fun createFile(name: String, language: String, folder: String = "") {
         viewModelScope.launch {
             saveCurrentFileImmediately() // Save any pending edits first
@@ -257,16 +376,65 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 else -> "console.log(\"File loaded successfully!\");"
             }
             
-            val newFile = ProgramFile(
-                name = finalName,
-                content = defaultContent,
-                language = language,
-                isCurrent = true,
-                folder = folder
-            )
-            val fileId = repository.insertFile(newFile)
-            repository.selectFile(fileId)
-            addLog("info", "Created file $finalName" + (if (folder.isNotEmpty()) " in folder $folder" else ""))
+            // Create physically on disk
+            try {
+                com.example.ui.files.LocalFileSystemManager.saveFile(
+                    getApplication(),
+                    finalName,
+                    folder,
+                    defaultContent
+                )
+                // Synchronize with database
+                com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+                
+                // Select newly created file from synced DB
+                val allFiles = repository.getFilesList()
+                val createdFile = allFiles.find { it.name == finalName && it.folder == folder }
+                if (createdFile != null) {
+                    repository.selectFile(createdFile.id)
+                }
+                addLog("info", "Created file $finalName" + (if (folder.isNotEmpty()) " in folder $folder" else ""))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create physical file", e)
+                addLog("error", "Failed to create physical file: ${e.message}")
+            }
+        }
+    }
+
+    fun createFileWithContent(name: String, language: String, folder: String = "", content: String) {
+        viewModelScope.launch {
+            saveCurrentFileImmediately() // Save any pending edits first
+            
+            val finalName = if (name.contains(".")) name else {
+                when (language) {
+                    "javascript" -> "$name.js"
+                    "html" -> "$name.html"
+                    "css" -> "$name.css"
+                    else -> name
+                }
+            }
+            
+            try {
+                com.example.ui.files.LocalFileSystemManager.saveFile(
+                    getApplication(),
+                    finalName,
+                    folder,
+                    content
+                )
+                // Synchronize with database
+                com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+                
+                // Select newly created file from synced DB
+                val allFiles = repository.getFilesList()
+                val createdFile = allFiles.find { it.name == finalName && it.folder == folder }
+                if (createdFile != null) {
+                    repository.selectFile(createdFile.id)
+                }
+                addLog("info", "✓ Created tutorial file $finalName" + (if (folder.isNotEmpty()) " in folder $folder" else ""))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create tutorial file", e)
+                addLog("error", "Failed to create tutorial file: ${e.message}")
+            }
         }
     }
 
@@ -284,20 +452,33 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         editorCode = newCode
         val file = currentFile.value ?: return
         
-        // Cancel the previous save job
-        saveJob?.cancel()
-        // Delay disk write by 800ms of inactivity to completely eliminate typing lag
-        saveJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(800)
-            repository.updateFile(file.copy(content = newCode, lastModified = System.currentTimeMillis()))
-            
-            // Also autosave back to external system file URI if linked
-            file.externalUri?.let { uriStr ->
-                try {
-                    val uri = android.net.Uri.parse(uriStr)
-                    com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, newCode)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to autosave to external Uri: $uriStr", e)
+        if (isAutosaveEnabled) {
+            // Cancel the previous save job
+            saveJob?.cancel()
+            // Delay disk write by 800ms of inactivity to completely eliminate typing lag
+            saveJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(800)
+                
+                // Write physically if not external
+                if (file.externalUri == null) {
+                    com.example.ui.files.LocalFileSystemManager.saveFile(
+                        getApplication(),
+                        file.name,
+                        file.folder,
+                        newCode
+                    )
+                }
+
+                repository.updateFile(file.copy(content = newCode, lastModified = System.currentTimeMillis()))
+                
+                // Also autosave back to external system file URI if linked
+                file.externalUri?.let { uriStr ->
+                    try {
+                        val uri = android.net.Uri.parse(uriStr)
+                        com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, newCode)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to autosave to external Uri: $uriStr", e)
+                    }
                 }
             }
         }
@@ -305,7 +486,16 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteFile(file: ProgramFile) {
         viewModelScope.launch {
+            if (file.externalUri == null) {
+                com.example.ui.files.LocalFileSystemManager.deleteFile(
+                    getApplication(),
+                    file.name,
+                    file.folder
+                )
+            }
             repository.deleteFile(file)
+            // Resync to clean up any references and ensure proper current file selection
+            com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
             addLog("warn", "Deleted file ${file.name}")
         }
     }
@@ -642,25 +832,31 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             
-            val clonedFile = ProgramFile(
-                name = finalName,
-                content = editorCode,
-                language = current.language,
-                isCurrent = true,
-                folder = folder
+            // Save physically first
+            com.example.ui.files.LocalFileSystemManager.saveFile(
+                getApplication(),
+                finalName,
+                folder,
+                editorCode
             )
-            val fileId = repository.insertFile(clonedFile)
-            repository.selectFile(fileId)
+            
+            // Synchronize database
+            com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+            
+            // Select cloned file
+            val allFiles = repository.getFilesList()
+            val createdFile = allFiles.find { it.name == finalName && it.folder == folder }
+            if (createdFile != null) {
+                repository.selectFile(createdFile.id)
+            }
             addLog("info", "Cloned ${current.name} to $finalName via Save As")
         }
     }
 
     fun deleteFolder(folderName: String) {
         viewModelScope.launch {
-            val allFiles = repository.getFilesList()
-            allFiles.filter { it.folder == folderName }.forEach { file ->
-                repository.deleteFile(file)
-            }
+            com.example.ui.files.LocalFileSystemManager.deleteFolder(getApplication(), folderName)
+            com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
             addLog("warn", "Deleted folder $folderName and all its files")
         }
     }
@@ -774,6 +970,350 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // --- Advanced File Saving & Management Operations ---
+
+    fun renameFile(file: ProgramFile, newName: String) {
+        viewModelScope.launch {
+            val cleanName = newName.trim()
+            if (cleanName.isEmpty()) return@launch
+            
+            if (file.externalUri == null) {
+                com.example.ui.files.LocalFileSystemManager.renameFile(
+                    getApplication(),
+                    file.name,
+                    file.folder,
+                    cleanName
+                )
+            }
+            
+            com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+            addLog("info", "✓ Renamed file: ${file.name} -> $cleanName")
+            
+            // If this is the current file, refresh loaded file ID
+            if (currentFile.value?.id == file.id) {
+                loadedFileId = null // Force reload/sync
+            }
+        }
+    }
+
+    fun duplicateFile(file: ProgramFile, duplicateName: String) {
+        viewModelScope.launch {
+            val cleanName = duplicateName.trim()
+            if (cleanName.isEmpty()) return@launch
+            
+            if (file.externalUri == null) {
+                com.example.ui.files.LocalFileSystemManager.duplicateFile(
+                    getApplication(),
+                    file.name,
+                    file.folder,
+                    cleanName
+                )
+            }
+            
+            com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+            addLog("info", "✓ Duplicated file: ${file.name} -> $cleanName")
+        }
+    }
+
+    fun moveFile(file: ProgramFile, destFolder: String) {
+        viewModelScope.launch {
+            val targetFolderNormalized = destFolder.trim().replace("//", "/").trim('/')
+            if (file.externalUri == null) {
+                com.example.ui.files.LocalFileSystemManager.moveFile(
+                    getApplication(),
+                    file.name,
+                    file.folder,
+                    targetFolderNormalized
+                )
+            }
+            
+            com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+            addLog("info", "✓ Moved file: ${file.name} to folder ${if (destFolder.isEmpty()) "Root" else destFolder}")
+            
+            if (currentFile.value?.id == file.id) {
+                loadedFileId = null // Force sync
+            }
+        }
+    }
+
+    fun copyFile(file: ProgramFile, destFolder: String) {
+        viewModelScope.launch {
+            val targetFolderNormalized = destFolder.trim().replace("//", "/").trim('/')
+            if (file.externalUri == null) {
+                com.example.ui.files.LocalFileSystemManager.copyFile(
+                    getApplication(),
+                    file.name,
+                    file.folder,
+                    targetFolderNormalized
+                )
+            }
+            
+            com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+            addLog("info", "✓ Copied file: ${file.name} into folder ${if (destFolder.isEmpty()) "Root" else destFolder}")
+        }
+    }
+
+    fun createNewFolder(folderPath: String) {
+        viewModelScope.launch {
+            val cleanFolder = folderPath.trim().replace("//", "/").trim('/')
+            if (cleanFolder.isEmpty()) return@launch
+            
+            com.example.ui.files.LocalFileSystemManager.createFolder(getApplication(), cleanFolder)
+            com.example.ui.files.LocalFileSystemManager.saveFile(
+                getApplication(),
+                "index.html",
+                cleanFolder,
+                "<!DOCTYPE html>\n<html>\n<body>\n    <h2>My Folder project: $cleanFolder</h2>\n</body>\n</html>"
+            )
+            
+            com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+            addLog("info", "✓ Created new folder: $cleanFolder (Scaffolded with index.html)")
+        }
+    }
+
+    fun addFileToRecentlyOpened(fileId: Int) {
+        viewModelScope.launch {
+            recentlyOpenedIds.remove(fileId)
+            recentlyOpenedIds.add(0, fileId)
+            if (recentlyOpenedIds.size > 10) {
+                recentlyOpenedIds.removeAt(recentlyOpenedIds.lastIndex)
+            }
+            repository.saveSetting("recentlyOpenedIds", recentlyOpenedIds.joinToString(","))
+        }
+    }
+
+    fun toggleFavoriteFolder(folderName: String) {
+        viewModelScope.launch {
+            if (favoriteFolders.contains(folderName)) {
+                favoriteFolders.remove(folderName)
+            } else {
+                favoriteFolders.add(folderName)
+            }
+            repository.saveSetting("favoriteFolders", favoriteFolders.joinToString(","))
+        }
+    }
+
+    // --- Physical Device Storage File Manager Operations ---
+
+    private fun getDocumentFileForCurrentPath(context: android.content.Context): androidx.documentfile.provider.DocumentFile? {
+        val uriStr = externalWorkspaceUri.value ?: return null
+        val rootUri = android.net.Uri.parse(uriStr)
+        val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, rootUri) ?: return null
+        
+        val path = currentExternalPath.value
+        if (path.isEmpty()) return rootDoc
+        
+        var currentDoc = rootDoc
+        val parts = path.split("/")
+        for (part in parts) {
+            if (part.isEmpty()) continue
+            val found = currentDoc.findFile(part)
+            if (found != null && found.isDirectory) {
+                currentDoc = found
+            } else {
+                return null
+            }
+        }
+        return currentDoc
+    }
+
+    fun refreshExternalFiles(context: android.content.Context) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val targetFolder = getDocumentFileForCurrentPath(context)
+                if (targetFolder == null) {
+                    withContext(Dispatchers.Main) {
+                        externalFilesList.clear()
+                        addLog("error", "Could not access storage folder at path: ${currentExternalPath.value}")
+                    }
+                    return@launch
+                }
+                
+                val list = targetFolder.listFiles()
+                val items = list.map { doc ->
+                    ExternalStorageItem(
+                        uriString = doc.uri.toString(),
+                        name = doc.name ?: "Untitled",
+                        isDirectory = doc.isDirectory,
+                        size = doc.length(),
+                        lastModified = doc.lastModified(),
+                        mimeType = doc.type,
+                        absolutePath = if (currentExternalPath.value.isEmpty()) (doc.name ?: "") else "${currentExternalPath.value}/${doc.name ?: ""}"
+                    )
+                }.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                
+                withContext(Dispatchers.Main) {
+                    externalFilesList.clear()
+                    externalFilesList.addAll(items)
+                }
+            } catch (e: Exception) {
+                Log.e("IdeViewModel", "Error refreshing external files", e)
+                withContext(Dispatchers.Main) {
+                    addLog("error", "Failed to scan device storage: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun setExternalWorkspace(context: android.content.Context, uri: android.net.Uri) {
+        viewModelScope.launch {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to persist tree URI permission", e)
+            }
+
+            val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+            val name = docFile?.name ?: "Device Storage"
+
+            externalWorkspaceUri.value = uri.toString()
+            externalWorkspaceName.value = name
+            currentExternalPath.value = ""
+
+            repository.saveSetting("externalWorkspaceUri", uri.toString())
+            repository.saveSetting("externalWorkspaceName", name)
+
+            addLog("info", "✓ Connected storage workspace: $name")
+            refreshExternalFiles(context)
+        }
+    }
+
+    fun disconnectExternalWorkspace() {
+        viewModelScope.launch {
+            externalWorkspaceUri.value = null
+            externalWorkspaceName.value = null
+            externalFilesList.clear()
+            currentExternalPath.value = ""
+
+            repository.saveSetting("externalWorkspaceUri", "")
+            repository.saveSetting("externalWorkspaceName", "")
+            addLog("warn", "Disconnected storage workspace.")
+        }
+    }
+
+    fun createExternalFile(context: android.content.Context, name: String, extension: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val targetFolder = getDocumentFileForCurrentPath(context)
+            if (targetFolder == null) {
+                withContext(Dispatchers.Main) { addLog("error", "Cannot create file: Current folder unavailable.") }
+                return@launch
+            }
+            
+            val fileName = if (name.endsWith(".$extension")) name else "$name.$extension"
+            val mimeType = when (extension) {
+                "html" -> "text/html"
+                "css" -> "text/css"
+                else -> "text/javascript"
+            }
+            
+            val newFile = targetFolder.createFile(mimeType, fileName)
+            if (newFile != null) {
+                val initialContent = when (extension) {
+                    "html" -> "<!DOCTYPE html>\n<html>\n<body>\n    <h2>Created in Device Storage</h2>\n</body>\n</html>"
+                    "css" -> "body {\n    background-color: #121212;\n    color: #ffffff;\n}"
+                    else -> "console.log(\"CodeX Editor physical file created!\");"
+                }
+                com.example.ui.files.ExternalFileHelper.writeTextToUri(context, newFile.uri, initialContent)
+                withContext(Dispatchers.Main) {
+                    addLog("info", "✓ Created physical file: $fileName")
+                    refreshExternalFiles(context)
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    addLog("error", "Failed to create physical file $fileName on storage.")
+                }
+            }
+        }
+    }
+
+    fun createExternalFolder(context: android.content.Context, name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val targetFolder = getDocumentFileForCurrentPath(context)
+            if (targetFolder == null) {
+                withContext(Dispatchers.Main) { addLog("error", "Cannot create folder: Current path unavailable.") }
+                return@launch
+            }
+            
+            val newDir = targetFolder.createDirectory(name)
+            if (newDir != null) {
+                withContext(Dispatchers.Main) {
+                    addLog("info", "✓ Created directory: $name")
+                    refreshExternalFiles(context)
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    addLog("error", "Failed to create directory $name on storage.")
+                }
+            }
+        }
+    }
+
+    fun deleteExternalItem(context: android.content.Context, item: ExternalStorageItem) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val uri = android.net.Uri.parse(item.uriString)
+            val docFile = if (item.isDirectory) {
+                androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+            } else {
+                androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)
+            }
+            
+            if (docFile != null && docFile.exists()) {
+                val deleted = docFile.delete()
+                if (deleted) {
+                    withContext(Dispatchers.Main) {
+                        addLog("warn", "Deleted storage item: ${item.name}")
+                        refreshExternalFiles(context)
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        addLog("error", "Failed to delete storage item ${item.name}")
+                    }
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    addLog("error", "Storage item ${item.name} not found.")
+                }
+            }
+        }
+    }
+
+    fun renameExternalItem(context: android.content.Context, item: ExternalStorageItem, newName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val uri = android.net.Uri.parse(item.uriString)
+            val docFile = if (item.isDirectory) {
+                androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+            } else {
+                androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)
+            }
+            
+            if (docFile != null && docFile.exists()) {
+                val renamed = docFile.renameTo(newName)
+                if (renamed) {
+                    withContext(Dispatchers.Main) {
+                        addLog("info", "✓ Renamed storage item: ${item.name} to $newName")
+                        refreshExternalFiles(context)
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        addLog("error", "Failed to rename ${item.name}")
+                    }
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    addLog("error", "Storage item ${item.name} not found.")
+                }
+            }
+        }
+    }
+
+    fun openExternalStorageFile(context: android.content.Context, item: ExternalStorageItem) {
+        val uri = android.net.Uri.parse(item.uriString)
+        openExternalFile(context, uri)
+    }
+
     override fun onCleared() {
         super.onCleared()
         voiceAssistant.shutdown()
@@ -790,4 +1330,14 @@ data class NpmSearchResult(
     val name: String,
     val description: String,
     val version: String
+)
+
+data class ExternalStorageItem(
+    val uriString: String,
+    val name: String,
+    val isDirectory: Boolean,
+    val size: Long = 0,
+    val lastModified: Long = 0,
+    val mimeType: String? = null,
+    val absolutePath: String = ""
 )

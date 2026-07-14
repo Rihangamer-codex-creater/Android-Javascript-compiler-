@@ -16,6 +16,20 @@ fun CreateFileDialog(
     var newFileName by remember { mutableStateOf("") }
     var newFileLang by remember { mutableStateOf("javascript") }
 
+    val files by viewModel.files.collectAsState()
+    val finalName = if (newFileName.contains(".")) {
+        newFileName.trim()
+    } else {
+        val ext = when (newFileLang) {
+            "javascript" -> "js"
+            "html" -> "html"
+            "css" -> "css"
+            else -> "js"
+        }
+        "${newFileName.trim()}.$ext"
+    }
+    val fileExists = files.any { it.name.equals(finalName, ignoreCase = true) && it.folder == selectedFolder }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { 
@@ -30,9 +44,18 @@ fun CreateFileDialog(
                     onValueChange = { newFileName = it },
                     label = { Text("File Name (e.g. main)") },
                     singleLine = true,
+                    isError = fileExists,
                     modifier = Modifier.fillMaxWidth()
                 )
                 
+                if (fileExists) {
+                    Text(
+                        text = "⚠️ A file named '$finalName' already exists here.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
                 Text("Select Language File Type:", style = MaterialTheme.typography.bodySmall)
                 
                 Row(
@@ -53,7 +76,7 @@ fun CreateFileDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (newFileName.isNotBlank()) {
+                    if (newFileName.isNotBlank() && !fileExists) {
                         viewModel.createFile(
                             name = newFileName.trim(), 
                             language = newFileLang, 
@@ -61,7 +84,8 @@ fun CreateFileDialog(
                         )
                         onDismiss()
                     }
-                }
+                },
+                enabled = newFileName.isNotBlank() && !fileExists
             ) {
                 Text("Create")
             }
@@ -130,47 +154,93 @@ fun SaveFileAsDialog(
 ) {
     var saveAsNewName by remember { mutableStateOf("") }
     var saveAsFolderName by remember { mutableStateOf("") }
+    var showOverwriteWarning by remember { mutableStateOf(false) }
+
+    val files by viewModel.files.collectAsState()
+    val currentFile by viewModel.currentFile.collectAsState()
+
+    val finalName = if (saveAsNewName.contains(".")) {
+        saveAsNewName.trim()
+    } else {
+        val extension = when (currentFile?.language) {
+            "javascript" -> "js"
+            "html" -> "html"
+            "css" -> "css"
+            else -> "js"
+        }
+        "${saveAsNewName.trim()}.$extension"
+    }
+    val fileExists = files.any { it.name.equals(finalName, ignoreCase = true) && it.folder == saveAsFolderName.trim() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Save File As") },
+        title = { Text(if (showOverwriteWarning) "Overwrite Warning" else "Save File As") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (showOverwriteWarning) {
                 Text(
-                    text = "Save a copy of the current file in local workspace.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "A file named '$finalName' already exists in folder '${if (saveAsFolderName.trim().isEmpty()) "Root" else saveAsFolderName.trim()}'. Are you sure you want to overwrite it?",
+                    color = MaterialTheme.colorScheme.error
                 )
-                OutlinedTextField(
-                    value = saveAsNewName,
-                    onValueChange = { saveAsNewName = it },
-                    label = { Text("New File Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = saveAsFolderName,
-                    onValueChange = { saveAsFolderName = it },
-                    label = { Text("Folder Name (leave empty for Root)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "Save a copy of the current file in local workspace.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = saveAsNewName,
+                        onValueChange = { saveAsNewName = it; showOverwriteWarning = false },
+                        label = { Text("New File Name") },
+                        singleLine = true,
+                        isError = saveAsNewName.isNotBlank() && fileExists,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = saveAsFolderName,
+                        onValueChange = { saveAsFolderName = it; showOverwriteWarning = false },
+                        label = { Text("Folder Name (leave empty for Root)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (saveAsNewName.isNotBlank() && fileExists) {
+                        Text(
+                            text = "⚠️ File already exists. Clicking Save As will prompt to overwrite.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
                     if (saveAsNewName.isNotBlank()) {
-                        viewModel.saveFileAs(saveAsNewName.trim(), saveAsFolderName.trim())
+                        if (fileExists && !showOverwriteWarning) {
+                            showOverwriteWarning = true
+                        } else {
+                            viewModel.saveFileAs(saveAsNewName.trim(), saveAsFolderName.trim())
+                            onDismiss()
+                        }
+                    }
+                },
+                enabled = saveAsNewName.isNotBlank(),
+                colors = if (showOverwriteWarning) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error) else ButtonDefaults.buttonColors()
+            ) {
+                Text(if (showOverwriteWarning) "Overwrite" else "Save As")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    if (showOverwriteWarning) {
+                        showOverwriteWarning = false
+                    } else {
                         onDismiss()
                     }
                 }
             ) {
-                Text("Save As")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
                 Text("Cancel")
             }
         }

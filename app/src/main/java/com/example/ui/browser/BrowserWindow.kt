@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -42,6 +44,7 @@ fun BrowserWindow(
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
+    var isDesktopView by remember { mutableStateOf(false) }
 
     val barBgColor = if (isDarkMode) Color(0xFF1C1B1F) else Color(0xFFFAFAFA)
     val barTextColor = if (isDarkMode) Color(0xFFE6E1E5) else Color(0xFF1C1B1F)
@@ -124,6 +127,28 @@ fun BrowserWindow(
                 }
             }
 
+            // Desktop / Mobile site layout toggle
+            IconButton(
+                onClick = {
+                    isDesktopView = !isDesktopView
+                    webView?.let { web ->
+                        web.settings.userAgentString = if (isDesktopView) {
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        } else {
+                            null
+                        }
+                        web.reload()
+                    }
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = if (isDesktopView) Icons.Default.Computer else Icons.Default.Smartphone,
+                    contentDescription = if (isDesktopView) "Switch to Mobile View" else "Switch to Desktop View",
+                    tint = if (isDesktopView) MaterialTheme.colorScheme.primary else barTextColor
+                )
+            }
+
             // Address Bar
             Box(
                 modifier = Modifier
@@ -179,6 +204,14 @@ fun BrowserWindow(
                         allowFileAccess = true
                         databaseEnabled = true
                         mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        // Responsive Viewport settings (Task 1 & Task 5 desktop view)
+                        useWideViewPort = true
+                        loadWithOverviewMode = true
+                        
+                        // Zoom and pinch-to-zoom support
+                        setSupportZoom(true)
+                        builtInZoomControls = true
+                        displayZoomControls = false
                     }
 
                     // Enable debugging
@@ -205,6 +238,18 @@ fun BrowserWindow(
 
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
+                            
+                            // Task 1: Dynamically inject CSS styling to auto-fit any <img> elements in the WebView
+                            val cssInjection = """
+                                (function() {
+                                    const style = document.createElement('style');
+                                    style.type = 'text/css';
+                                    style.innerHTML = 'img { max-width: 100% !important; height: auto !important; box-sizing: border-box; }';
+                                    document.head.appendChild(style);
+                                })()
+                            """.trimIndent()
+                            view?.evaluateJavascript(cssInjection, null)
+
                             currentUrl = url ?: "about:blank"
                             isLoading = false
                             canGoBack = view?.canGoBack() ?: false

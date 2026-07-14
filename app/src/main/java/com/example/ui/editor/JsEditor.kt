@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -23,6 +24,13 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.Redo
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 
 @Composable
 fun JsEditor(
@@ -43,6 +51,11 @@ fun JsEditor(
         )
     }
 
+    // Undo & Redo History stacks keyed on fileId for robust offline state control
+    val undoStack = remember(fileId) { mutableStateListOf<TextFieldValue>() }
+    val redoStack = remember(fileId) { mutableStateListOf<TextFieldValue>() }
+    val focusRequester = remember { FocusRequester() }
+
     val editorBgColor = if (isDarkMode) Color(0xFF1C1B1F) else Color(0xFFFAFAFA)
     val sidebarBgColor = if (isDarkMode) Color(0xFF1C1B1F) else Color(0xFFF1F5F9)
     val textColor = if (isDarkMode) Color(0xFFE6E1E5) else Color(0xFF1C1B1F)
@@ -55,14 +68,27 @@ fun JsEditor(
     
     val syntaxHighlighter = remember(isDarkMode) { JsSyntaxHighlighter(isDarkMode) }
 
-    // Determine number of lines
-    val lines = textFieldValue.text.split("\n")
-    val lineCount = lines.size.coerceAtLeast(1)
+    // Determine number of lines and longest line with caching to prevent scroll/render lag
+    val lines = remember(textFieldValue.text) { textFieldValue.text.split("\n") }
+    val lineCount = remember(lines) { lines.size.coerceAtLeast(1) }
     val lineNumbersText = remember(lineCount) {
         (1..lineCount).joinToString("\n")
     }
+    val longestLineLength = remember(lines) {
+        lines.maxOfOrNull { it.length } ?: 0
+    }
+    val configuration = LocalConfiguration.current
+    val availableWidthDp = remember(configuration.screenWidthDp) {
+        java.lang.Math.max(300, configuration.screenWidthDp - 44).dp
+    }
+    val longestLineDp = remember(longestLineLength) {
+        (longestLineLength * 8 + 32).dp
+    }
+    val editorWidth = remember(availableWidthDp, longestLineDp) {
+        if (longestLineDp > availableWidthDp) longestLineDp else availableWidthDp
+    }
 
-    // Common autocomplete and symbol insertion helper
+    // Common autocomplete and symbol insertion helper with Undo history recording
     val insertSymbol: (String) -> Unit = { symbol ->
         val text = textFieldValue.text
         val selection = textFieldValue.selection
@@ -73,60 +99,134 @@ fun JsEditor(
         val newSelection = androidx.compose.ui.text.TextRange(start + symbol.length)
         
         val newValue = TextFieldValue(text = newText, selection = newSelection)
+        
+        // Save history checkpoint before inserting a symbol
+        redoStack.clear()
+        if (undoStack.size >= 50) {
+            undoStack.removeAt(0)
+        }
+        undoStack.add(textFieldValue)
+        
         textFieldValue = newValue
         onCodeChanged(newText)
     }
 
+    // Perform Undo history pop
+    val performUndo: () -> Unit = {
+        if (undoStack.isNotEmpty()) {
+            val previousState = undoStack.removeAt(undoStack.lastIndex)
+            redoStack.add(textFieldValue)
+            textFieldValue = previousState
+            onCodeChanged(previousState.text)
+        }
+    }
+
+    // Perform Redo history pop
+    val performRedo: () -> Unit = {
+        if (redoStack.isNotEmpty()) {
+            val nextState = redoStack.removeAt(redoStack.lastIndex)
+            undoStack.add(textFieldValue)
+            textFieldValue = nextState
+            onCodeChanged(nextState.text)
+        }
+    }
+
     val autocompleteSymbols = listOf(
-        "{ }", "( )", "[ ]", ";", "=", "=>", "const ", "let ", "function ", 
+        "\t", "{ }", "( )", "[ ]", ";", "=", "=>", "const ", "let ", "function ", 
         "console.log(", "document.getElementById(", "Math.random()", 
         "JSON.stringify(", "JSON.parse(", "async ", "await ", "if (", "else "
     )
 
     Column(modifier = modifier.fillMaxSize()) {
-        // Autocomplete & Quick Symbols Bar
-        if (isAutocompleteEnabled) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(sidebarBgColor)
-                    .horizontalScroll(autocompleteScrollState)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+        // Sticky Controls & Quick Symbols Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(sidebarBgColor)
+                .padding(vertical = 4.dp, horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Undo Control Button
+            IconButton(
+                onClick = performUndo,
+                enabled = undoStack.isNotEmpty(),
+                modifier = Modifier.size(36.dp)
             ) {
-                autocompleteSymbols.forEach { symbol ->
-                    val cleanLabel = when (symbol) {
-                        "{ }" -> "{ }"
-                        "( )" -> "( )"
-                        "[ ]" -> "[ ]"
-                        else -> symbol.trim()
-                    }
-                    Button(
-                        onClick = {
-                            val insertion = when (symbol) {
-                                "{ }" -> "{\n    \n}"
-                                "( )" -> "()"
-                                "[ ]" -> "[]"
-                                else -> symbol
-                            }
-                            insertSymbol(insertion)
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDarkMode) Color(0xFF49454F) else Color(0xFFE2E8F0),
-                            contentColor = if (isDarkMode) Color(0xFFE6E1E5) else Color(0xFF1C1B1F)
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                        modifier = Modifier.height(32.dp)
-                    ) {
-                        Text(
-                            text = cleanLabel,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
-                        )
+                Icon(
+                    imageVector = Icons.Default.Undo,
+                    contentDescription = "Undo",
+                    tint = if (undoStack.isNotEmpty()) textColor else textColor.copy(alpha = 0.3f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // Redo Control Button
+            IconButton(
+                onClick = performRedo,
+                enabled = redoStack.isNotEmpty(),
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Redo,
+                    contentDescription = "Redo",
+                    tint = if (redoStack.isNotEmpty()) textColor else textColor.copy(alpha = 0.3f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            VerticalDivider(
+                modifier = Modifier
+                    .height(24.dp)
+                    .padding(horizontal = 6.dp),
+                color = if (isDarkMode) Color(0xFF49454F) else Color(0xFFE2E8F0)
+            )
+
+            // Autocomplete & Quick Symbols Scrollable Bar
+            if (isAutocompleteEnabled) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(autocompleteScrollState),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    autocompleteSymbols.forEach { symbol ->
+                        val cleanLabel = when (symbol) {
+                            "\t" -> "Tab"
+                            "{ }" -> "{ }"
+                            "( )" -> "( )"
+                            "[ ]" -> "[ ]"
+                            else -> symbol.trim()
+                        }
+                        Button(
+                            onClick = {
+                                val insertion = when (symbol) {
+                                    "\t" -> "\t"
+                                    "{ }" -> "{\n    \n}"
+                                    "( )" -> "()"
+                                    "[ ]" -> "[]"
+                                    else -> symbol
+                                }
+                                insertSymbol(insertion)
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isDarkMode) Color(0xFF49454F) else Color(0xFFE2E8F0),
+                                contentColor = if (isDarkMode) Color(0xFFE6E1E5) else Color(0xFF1C1B1F)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text(
+                                text = cleanLabel,
+                                fontSize = 13.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
             }
         }
 
@@ -146,7 +246,7 @@ fun JsEditor(
                     .width(44.dp)
                     .background(sidebarBgColor)
                     .verticalScroll(verticalScrollState)
-                    .padding(vertical = 12.dp)
+                    .padding(top = 12.dp, bottom = 300.dp)
             ) {
                 Text(
                     text = lineNumbersText,
@@ -173,13 +273,39 @@ fun JsEditor(
                     .fillMaxHeight()
                     .verticalScroll(verticalScrollState)
                     .horizontalScroll(horizontalScrollState)
-                    .padding(horizontal = 12.dp, vertical = 12.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        focusRequester.requestFocus()
+                    }
+                    .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 300.dp)
             ) {
                 BasicTextField(
                     value = textFieldValue,
                     onValueChange = { newValue ->
+                        val oldText = textFieldValue.text
+                        val newText = newValue.text
+                        if (newText != oldText) {
+                            // Clear redo stack on manual text input
+                            redoStack.clear()
+                            
+                            // History saving heuristic (spaces, newlines, or block edits of 6+ characters)
+                            val lastSaved = undoStack.lastOrNull()
+                            val shouldPush = lastSaved == null ||
+                                    newText.endsWith(" ") ||
+                                    newText.endsWith("\n") ||
+                                    java.lang.Math.abs(newText.length - lastSaved.text.length) >= 6
+                            
+                            if (shouldPush) {
+                                if (undoStack.size >= 50) {
+                                    undoStack.removeAt(0)
+                                }
+                                undoStack.add(textFieldValue)
+                            }
+                        }
                         textFieldValue = newValue
-                        onCodeChanged(newValue.text)
+                        onCodeChanged(newText)
                     },
                     textStyle = TextStyle(
                         color = textColor,
@@ -195,7 +321,9 @@ fun JsEditor(
                         autoCorrectEnabled = false
                     ),
                     modifier = Modifier
-                        .width(3000.dp)
+                        .focusRequester(focusRequester)
+                        .fillMaxHeight()
+                        .width(editorWidth)
                         .wrapContentHeight()
                 )
             }

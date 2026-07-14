@@ -28,9 +28,11 @@ fun ProjectDrawerContent(
     currentFile: ProgramFile?,
     onOpenExternalFileTriggered: () -> Unit,
     onSaveAsExternalTriggered: () -> Unit,
+    onSaveToPublicDocumentsTriggered: () -> Unit,
     onNewFileTriggered: (String) -> Unit,
     onNewFolderTriggered: () -> Unit,
     onSaveAsLocalTriggered: () -> Unit,
+    onOpenFileManagerTriggered: () -> Unit,
     onDismissDrawer: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -50,7 +52,7 @@ fun ProjectDrawerContent(
     ) {
         // App Title
         Text(
-            text = "Commute Code Sandbox",
+            text = "CodeX Editor",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             color = textColor,
@@ -126,6 +128,42 @@ fun ProjectDrawerContent(
                     Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Open Device File", fontSize = 12.sp)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Advanced File Manager Button
+                Button(
+                    onClick = onOpenFileManagerTriggered,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Advanced File Manager", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Direct Save to My Files Button!
+                Button(
+                    onClick = onSaveToPublicDocumentsTriggered,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(horizontalAlignment = Alignment.Start) {
+                        Text("Save directly to My Files", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Saves to Local Documents/CommuteCodeSandbox", fontSize = 9.sp, color = textColor.copy(alpha = 0.6f))
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -341,8 +379,8 @@ fun ProjectDrawerContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "JavaScript IDE v1.1",
-            fontSize = 11.sp,
+            text = "CodeX Editor v3.8 | Created by CodeX",
+            fontSize = 10.sp,
             color = textColor.copy(alpha = 0.4f),
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )

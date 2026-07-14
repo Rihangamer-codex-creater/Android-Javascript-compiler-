@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "JavaScript IDE"
+rootProject.name = "CodeX Editor"
 
 include(":app")

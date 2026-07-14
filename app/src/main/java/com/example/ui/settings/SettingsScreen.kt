@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,6 +28,7 @@ fun SettingsScreen(
     onToggleVoiceSupport: () -> Unit,
     isAutoTerminateEnabled: Boolean = true,
     onToggleAutoTerminate: () -> Unit = {},
+    onOpenGuide: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val bgColor = if (isDarkMode) Color(0xFF1C1B1F) else Color(0xFFFAFAFA)
@@ -156,6 +158,42 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // Interactive Guide Card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            ),
+            onClick = onOpenGuide,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MenuBook,
+                    contentDescription = "Menu Book",
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "📖 CodeX Editor Interactive Guide",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "Interactive tutorials, quick templates, shortcuts & NPM help.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Info Card
         Card(
             colors = CardDefaults.cardColors(
@@ -171,13 +209,20 @@ fun SettingsScreen(
                 Icon(Icons.Default.Info, contentDescription = "Info", tint = MaterialTheme.colorScheme.primary)
                 Column {
                     Text(
-                        text = "JavaScript IDE v1.0",
+                        text = "CodeX Editor v3.8",
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         color = textColor
                     )
                     Text(
-                        text = "Designed for fully functional client-side JS & HTML development on the go.",
+                        text = "Developed by CodeX",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Designed for fully functional mobile JS & HTML development on the go.",
                         fontSize = 11.sp,
                         color = secondaryTextColor
                     )

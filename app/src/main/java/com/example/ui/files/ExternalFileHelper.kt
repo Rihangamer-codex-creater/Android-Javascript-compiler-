@@ -74,4 +74,58 @@ object ExternalFileHelper {
             else -> "javascript"
         }
     }
+
+    /**
+     * Detects standard MIME types for file saving.
+     */
+    fun detectMimeType(fileName: String): String {
+        return when (fileName.substringAfterLast('.', "").lowercase()) {
+            "html", "htm" -> "text/html"
+            "css" -> "text/css"
+            "js", "mjs", "jsx", "ts" -> "text/javascript"
+            else -> "text/plain"
+        }
+    }
+
+    /**
+     * Saves a file directly to the device's public local Documents folder under "CommuteCodeSandbox"
+     * bypassing Google Drive and SAF pickers completely.
+     */
+    fun saveFileToPublicDocuments(context: Context, fileName: String, content: String): Uri? {
+        val resolver = context.contentResolver
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, detectMimeType(fileName))
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOCUMENTS + "/CommuteCodeSandbox")
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+
+        val collectionUri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            android.provider.MediaStore.Files.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            android.provider.MediaStore.Files.getContentUri("external")
+        }
+
+        var fileUri: Uri? = null
+        try {
+            fileUri = resolver.insert(collectionUri, contentValues)
+            if (fileUri != null) {
+                resolver.openOutputStream(fileUri)?.use { out ->
+                    out.write(content.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+                    out.flush()
+                }
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    contentValues.clear()
+                    contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(fileUri, contentValues, null, null)
+                }
+                return fileUri
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save file to public Documents directory", e)
+        }
+        return null
+    }
 }
