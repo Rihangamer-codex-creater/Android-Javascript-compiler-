@@ -49,6 +49,10 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     var editorCode by mutableStateOf("")
         private set
 
+    // App loading window state
+    var isAppLoading by mutableStateOf(true)
+        private set
+
     // Code execution state
     var isCodeRunning by mutableStateOf(false)
     var runCodeEvent = MutableStateFlow<String?>(null)
@@ -410,6 +414,12 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e(TAG, "Failed initial workspace sync", e)
             }
 
+            // Beautiful transition delay before dismissing the loading screen
+            kotlinx.coroutines.delay(1000)
+            isAppLoading = false
+        }
+
+        viewModelScope.launch {
             // Synchronize current file text with editorCode only when active file ID changes
             currentFile.collect { file ->
                 if (file != null) {
@@ -451,6 +461,7 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveCurrentFileImmediately() {
         val file = currentFile.value ?: return
+        val contentToSave = editorCode
         saveJob?.cancel()
         saveScope.launch {
             try {
@@ -459,14 +470,14 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                 if (path.startsWith("/")) {
                     try {
                         val physicalFile = java.io.File(path)
-                        physicalFile.writeText(editorCode)
+                        physicalFile.writeText(contentToSave)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed physical write to $path", e)
                     }
                 } else if (path.startsWith("content://")) {
                     try {
                         val uri = android.net.Uri.parse(path)
-                        com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, editorCode)
+                        com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, contentToSave)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed SAF write to $path", e)
                     }
@@ -475,11 +486,11 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
                         getApplication(),
                         file.name,
                         file.folder,
-                        editorCode
+                        contentToSave
                     )
                 }
 
-                repository.updateFile(file.copy(content = editorCode, lastModified = System.currentTimeMillis()))
+                repository.updateFile(file.copy(content = contentToSave, lastModified = System.currentTimeMillis()))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save file in saveScope context", e)
             }
@@ -603,6 +614,74 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun closeCurrentFile() {
+        saveCurrentFileImmediately()
+        viewModelScope.launch {
+            db.programFileDao().clearCurrentStatus()
+            loadedFileId = null
+            editorCode = ""
+            addLog("info", "✓ Active file closed")
+        }
+    }
+
+    fun formatCurrentFileCode() {
+        val file = currentFile.value ?: return
+        val formatted = com.example.ui.editor.CodeFormatter.format(editorCode, file.language)
+        if (formatted != editorCode) {
+            editorCode = formatted
+            addLog("info", "✓ Code formatted successfully")
+        } else {
+            addLog("info", "✓ Code is already formatted")
+        }
+    }
+
+    fun createNewProject(projectName: String) {
+        viewModelScope.launch {
+            val cleanName = projectName.trim()
+            if (cleanName.isEmpty()) return@launch
+            
+            saveCurrentFileImmediately() // Save current file first
+            
+            try {
+                // Pre-scaffold HTML, CSS, JS files physically on disk under project/folder directory
+                com.example.ui.files.LocalFileSystemManager.saveFile(
+                    getApplication(),
+                    "index.html",
+                    cleanName,
+                    "<!DOCTYPE html>\n<html>\n<head>\n    <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n    <h1>Project: $cleanName</h1>\n    <p>Welcome to your new CodeX project!</p>\n    <script src=\"script.js\"></script>\n</body>\n</html>"
+                )
+                com.example.ui.files.LocalFileSystemManager.saveFile(
+                    getApplication(),
+                    "style.css",
+                    cleanName,
+                    "body {\n    background-color: #121212;\n    color: #ffffff;\n    font-family: sans-serif;\n    padding: 24px;\n}"
+                )
+                com.example.ui.files.LocalFileSystemManager.saveFile(
+                    getApplication(),
+                    "script.js",
+                    cleanName,
+                    "console.log('Project $cleanName loaded successfully!');"
+                )
+
+                // Synchronize with database
+                com.example.ui.files.LocalFileSystemManager.syncPhysicalWorkspaceWithDb(getApplication(), db)
+                
+                // Clear active status and select index.html in the new project
+                db.programFileDao().clearCurrentStatus()
+                val allFiles = repository.getFilesList()
+                val insertedHtml = allFiles.find { it.name == "index.html" && it.folder == cleanName }
+                if (insertedHtml != null) {
+                    repository.selectFile(insertedHtml.id)
+                }
+                
+                addLog("info", "✓ Scaffolded and loaded project workspace: $cleanName")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create project", e)
+                addLog("error", "Failed to create project: ${e.message}")
+            }
+        }
+    }
+
     fun createFile(name: String, language: String, folder: String = "") {
         viewModelScope.launch {
             saveCurrentFileImmediately() // Save any pending edits first
@@ -685,10 +764,46 @@ class IdeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectFile(fileId: Int) {
-        saveCurrentFileImmediately() // Save current file before switching
+        val file = currentFile.value
+        val contentToSave = editorCode
+        saveJob?.cancel()
+        
         viewModelScope.launch {
+            if (file != null) {
+                try {
+                    val path = file.externalUri ?: java.io.File(com.example.ui.files.LocalFileSystemManager.getWorkspaceRoot(getApplication()), file.name).absolutePath
+                    withContext(Dispatchers.IO) {
+                        if (path.startsWith("/")) {
+                            try {
+                                val physicalFile = java.io.File(path)
+                                physicalFile.writeText(contentToSave)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed physical write to $path", e)
+                            }
+                        } else if (path.startsWith("content://")) {
+                            try {
+                                val uri = android.net.Uri.parse(path)
+                                com.example.ui.files.ExternalFileHelper.writeTextToUri(getApplication(), uri, contentToSave)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed SAF write to $path", e)
+                            }
+                        } else {
+                            com.example.ui.files.LocalFileSystemManager.saveFile(
+                                getApplication(),
+                                file.name,
+                                file.folder,
+                                contentToSave
+                            )
+                        }
+                        repository.updateFile(file.copy(content = contentToSave, lastModified = System.currentTimeMillis()))
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error saving old file before switch", e)
+                }
+            }
+            
+            // Switch to the new file!
             repository.selectFile(fileId)
-            // Reset runner
             runCodeEvent.value = null
             isCodeRunning = false
         }

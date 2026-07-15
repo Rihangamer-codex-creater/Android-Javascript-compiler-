@@ -67,7 +67,7 @@ fun ProjectDrawerContent(
 
         Divider(color = borderColor, thickness = 1.dp)
 
-        // 1. File Operations Menu (NEW, OPEN, SAVE, SAVE AS)
+        // 1. File Operations Menu (NEW, OPEN, SAVE, SAVE AS, CLOSE)
         Text(
             text = "FILE OPERATIONS",
             fontSize = 10.sp,
@@ -82,16 +82,45 @@ fun ProjectDrawerContent(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Row 1: New File & New Folder
+                // Row 1: Create New Project
+                Button(
+                    onClick = onNewFolderTriggered, // Triggers CreateProjectDialog
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Create New Project", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+
+                // Row 2: Load Device File & New File (Inside workspace/project)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
+                        onClick = onOpenExternalFileTriggered, // Load external file via SAF
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary,
+                            contentColor = MaterialTheme.colorScheme.onSecondary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Load File", fontSize = 11.sp, maxLines = 1)
+                    }
+
+                    Button(
                         onClick = { onNewFileTriggered("") },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
+                            containerColor = MaterialTheme.colorScheme.tertiary,
+                            contentColor = MaterialTheme.colorScheme.onTertiary
                         ),
                         contentPadding = PaddingValues(horizontal = 8.dp),
                         modifier = Modifier.weight(1f)
@@ -100,38 +129,9 @@ fun ProjectDrawerContent(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("New File", fontSize = 11.sp, maxLines = 1)
                     }
-
-                    Button(
-                        onClick = onNewFolderTriggered,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        ),
-                        contentPadding = PaddingValues(horizontal = 8.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("New Folder", fontSize = 11.sp, maxLines = 1)
-                    }
                 }
 
-                // Row 2: Advanced File Manager Button
-                Button(
-                    onClick = onOpenFileManagerTriggered,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                    ),
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(vertical = 8.dp)
-                ) {
-                    Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Advanced File Manager", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-
-                // Row 3: Direct disk operations Save & Save As
+                // Row 3: Save & Save As (Device Storage)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -151,7 +151,7 @@ fun ProjectDrawerContent(
                     }
 
                     Button(
-                        onClick = onSaveAsLocalTriggered,
+                        onClick = onSaveAsExternalTriggered, // Save copy to device storage via SAF
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primaryContainer,
                             contentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -163,6 +163,22 @@ fun ProjectDrawerContent(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Save As", fontSize = 11.sp, maxLines = 1)
                     }
+                }
+
+                // Row 4: Close Active File
+                OutlinedButton(
+                    onClick = {
+                        viewModel.closeCurrentFile()
+                        onDismissDrawer()
+                    },
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Close Current File", fontSize = 12.sp)
                 }
             }
         }

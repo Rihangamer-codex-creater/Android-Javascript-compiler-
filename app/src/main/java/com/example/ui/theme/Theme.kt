@@ -39,7 +39,7 @@ private val LightColorScheme =
   )
 
 @Composable
-fun MyApplicationTheme(
+fun CodeXEditorTheme(
   darkTheme: Boolean = isSystemInDarkTheme(),
   // Set default dynamicColor to false to preserve carefully crafted palette
   dynamicColor: Boolean = false,

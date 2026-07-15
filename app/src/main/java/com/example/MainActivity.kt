@@ -10,7 +10,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import com.example.ui.IdeViewModel
 import com.example.ui.MainLayout
-import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.theme.CodeXEditorTheme
 
 /**
  * Main Application Activity.
@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
             val systemBgColor = if (isDarkMode) 0xFF1C1B1F.toInt() else 0xFFFAFAFA.toInt()
             window.decorView.setBackgroundColor(systemBgColor)
 
-            MyApplicationTheme(darkTheme = isDarkMode) {
+            CodeXEditorTheme(darkTheme = isDarkMode) {
                 MainLayout(viewModel)
             }
         }

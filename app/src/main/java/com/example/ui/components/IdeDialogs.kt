@@ -99,26 +99,26 @@ fun CreateFileDialog(
 }
 
 @Composable
-fun CreateFolderDialog(
+fun CreateProjectDialog(
     onDismiss: () -> Unit,
     viewModel: IdeViewModel
 ) {
-    var newFolderName by remember { mutableStateOf("") }
+    var newProjectName by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Create Project Folder") },
+        title = { Text("Create New Project") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "Creating a folder will automatically scaffold a 3-file web project (index.html, style.css, script.js) inside it.",
+                    text = "A new project will scaffold standard front-end files (index.html, style.css, script.js) with dynamic connections, allowing instant execution.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(
-                    value = newFolderName,
-                    onValueChange = { newFolderName = it },
-                    label = { Text("Folder Name (e.g. login_page)") },
+                    value = newProjectName,
+                    onValueChange = { newProjectName = it },
+                    label = { Text("Project Name (e.g. login_page)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -127,14 +127,13 @@ fun CreateFolderDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (newFolderName.isNotBlank()) {
-                        val folderNameClean = newFolderName.trim().replace(" ", "_")
-                        viewModel.createFile("index.html", "html", folderNameClean)
-                        viewModel.createFile("style.css", "css", folderNameClean)
-                        viewModel.createFile("script.js", "javascript", folderNameClean)
+                    if (newProjectName.isNotBlank()) {
+                        val cleanName = newProjectName.trim().replace(" ", "_")
+                        viewModel.createNewProject(cleanName)
                         onDismiss()
                     }
-                }
+                },
+                enabled = newProjectName.isNotBlank()
             ) {
                 Text("Create Project")
             }

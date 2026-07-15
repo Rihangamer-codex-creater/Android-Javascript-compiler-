@@ -27,11 +27,10 @@ import com.example.data.ProgramFile
 import com.example.ui.IdeViewModel
 import com.example.ui.browser.BrowserWindow
 import com.example.ui.components.CreateFileDialog
-import com.example.ui.components.CreateFolderDialog
+import com.example.ui.components.CreateProjectDialog
 import com.example.ui.components.SaveFileAsDialog
 import com.example.ui.editor.JsEditor
 import com.example.ui.explorer.ProjectDrawerContent
-import com.example.ui.explorer.FileManagerScreen
 import com.example.ui.libraries.LibrariesScreen
 import com.example.ui.settings.SettingsScreen
 import com.example.ui.terminal.ConsoleTerminal
@@ -115,15 +114,40 @@ fun MainLayout(viewModel: IdeViewModel) {
         }
     }
 
-    if (showFileManager) {
-        FileManagerScreen(
-            viewModel = viewModel,
-            files = files,
-            onClose = { showFileManager = false }
-        )
+    if (viewModel.isAppLoading) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(if (viewModel.isDarkMode) Color(0xFF1C1B1F) else Color(0xFFFAFAFA)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "CodeX Editor",
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (viewModel.isDarkMode) Color(0xFFE6E1E5) else Color(0xFF1C1B1F)
+                )
+                
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(48.dp)
+                )
+                
+                Text(
+                    text = "Preparing offline sandbox workspace...",
+                    fontSize = 13.sp,
+                    color = (if (viewModel.isDarkMode) Color(0xFFE6E1E5) else Color(0xFF1C1B1F)).copy(alpha = 0.6f)
+                )
+            }
+        }
     } else {
         ModalNavigationDrawer(
-            drawerState = drawerState,
+        drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
                 drawerContainerColor = if (viewModel.isDarkMode) Color(0xFF111318) else Color(0xFFFFFFFF),
@@ -161,10 +185,7 @@ fun MainLayout(viewModel: IdeViewModel) {
                         showSaveAsDialog = true
                         scope.launch { drawerState.close() }
                     },
-                    onOpenFileManagerTriggered = {
-                        showFileManager = true
-                        scope.launch { drawerState.close() }
-                    },
+                    onOpenFileManagerTriggered = {},
                     onDismissDrawer = {
                         scope.launch { drawerState.close() }
                     }
@@ -219,9 +240,11 @@ fun MainLayout(viewModel: IdeViewModel) {
                                 Icon(Icons.Default.Share, contentDescription = "Export File", tint = textColor)
                             }
 
-                            // Advanced File Manager Action
-                            IconButton(onClick = { showFileManager = true }) {
-                                Icon(Icons.Default.Folder, contentDescription = "File Manager", tint = textColor)
+                            // Format Code Action
+                            if (currentFile != null) {
+                                IconButton(onClick = { viewModel.formatCurrentFileCode() }) {
+                                    Icon(Icons.Default.FormatAlignLeft, contentDescription = "Format Code", tint = textColor)
+                                }
                             }
 
                             // Interactive User Guide Action
@@ -478,6 +501,7 @@ fun MainLayout(viewModel: IdeViewModel) {
             }
         }
     }
+    }
 
     // Dialog components
     if (showCreateDialog) {
@@ -489,7 +513,7 @@ fun MainLayout(viewModel: IdeViewModel) {
     }
 
     if (showCreateFolderDialog) {
-        CreateFolderDialog(
+        CreateProjectDialog(
             onDismiss = { showCreateFolderDialog = false },
             viewModel = viewModel
         )
@@ -511,7 +535,6 @@ fun MainLayout(viewModel: IdeViewModel) {
 
     if (!viewModel.isStoragePermissionGranted) {
         StoragePermissionDialog(viewModel = viewModel)
-    }
     }
 }
 
